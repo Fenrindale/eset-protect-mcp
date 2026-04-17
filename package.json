@@ -1,0 +1,54 @@
+{
+  "name": "eset-protect-mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for ESET PROTECT On-Prem REST API - manage devices, device groups, policies, and policy assignments",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "eset-protect-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "prepublishOnly": "npm run build",
+    "clean": "rimraf dist"
+  },
+  "keywords": [
+    "mcp",
+    "eset",
+    "eset-protect",
+    "model-context-protocol",
+    "security",
+    "endpoint-protection",
+    "antivirus",
+    "device-management",
+    "policy-management"
+  ],
+  "author": "Fenrindale",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fenrindale/eset-protect-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Fenrindale/eset-protect-mcp/issues"
+  },
+  "homepage": "https://github.com/Fenrindale/eset-protect-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
