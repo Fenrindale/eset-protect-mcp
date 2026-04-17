@@ -343,35 +343,65 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       ),
     },
     async ({ enabled, xmlDefinition, ruleUuids, note, scopes }) => {
-      // 2-step creation to avoid WAF (volt-adc) false-positive blocking on complex XML payloads.
-      // Step 1: Create exclusion with a minimal placeholder XML that won't trigger WAF patterns.
-      const placeholderXml = '<rule><description><name>Pending</name><category>Exclusion</category></description><definition></definition></rule>';
-      const exclusion: Record<string, unknown> = { enabled, xmlDefinition: placeholderXml };
-      if (ruleUuids) exclusion.ruleUuids = ruleUuids;
-      if (note) exclusion.note = note;
-      if (scopes) exclusion.scopes = JSON.parse(scopes);
+      const parsedScopes = scopes ? JSON.parse(scopes) : undefined;
 
-      const createResult = await client.createEdrRuleExclusion({ exclusion }) as Record<string, unknown>;
+      // Helper to build the exclusion payload
+      const buildExclusion = (xml?: string): Record<string, unknown> => {
+        const exc: Record<string, unknown> = { enabled };
+        if (xml) exc.xmlDefinition = xml;
+        if (ruleUuids) exc.ruleUuids = ruleUuids;
+        if (note) exc.note = note;
+        if (parsedScopes) exc.scopes = parsedScopes;
+        return exc;
+      };
 
-      // Extract UUID from creation response
-      const created = (createResult.exclusion ?? createResult) as Record<string, unknown>;
-      const uuid = created.uuid as string | undefined;
-      if (!uuid) {
-        return json({ error: "Exclusion created but UUID not returned", createResult });
-      }
+      // Helper to extract UUID from API response
+      const extractUuid = (result: unknown): string | undefined => {
+        const r = result as Record<string, unknown>;
+        const obj = (r.exclusion ?? r) as Record<string, unknown>;
+        return obj.uuid as string | undefined;
+      };
 
-      // Step 2: Update with the actual XML definition via separate endpoint (avoids WAF on complex XML).
+      // Strategy 1: Direct creation with full XML (single step)
       try {
-        const updateResult = await client.updateEdrRuleExclusionDefinition(uuid, { xmlDefinition });
-        return json(updateResult);
-      } catch (updateError) {
-        // If update fails, return the created exclusion info so user can manually update
-        return json({
-          warning: "Exclusion created but XML update failed. Use update_edr_rule_exclusion_definition to set the XML.",
-          exclusionUuid: uuid,
-          error: String(updateError),
-          createResult,
-        });
+        const result = await client.createEdrRuleExclusion({ exclusion: buildExclusion(xmlDefinition) });
+        return json(result);
+      } catch (directError) {
+        const errMsg = String(directError);
+        // If it's a permission/auth error, don't retry with other strategies
+        if (errMsg.includes("401") || errMsg.includes("403: {")) {
+          throw directError;
+        }
+        // WAF block (403 empty/text or 400 empty) or other error — try 2-step
+
+        // Strategy 2: Create WITHOUT xmlDefinition, then updateDefinition separately
+        try {
+          const createResult = await client.createEdrRuleExclusion({ exclusion: buildExclusion() });
+          const uuid = extractUuid(createResult);
+          if (!uuid) {
+            return json({ error: "Exclusion created but UUID not returned — cannot set XML definition", createResult });
+          }
+          // Now set the real XML via the separate updateDefinition endpoint
+          try {
+            const updateResult = await client.updateEdrRuleExclusionDefinition(uuid, { xmlDefinition });
+            return json(updateResult);
+          } catch (updateError) {
+            return json({
+              warning: "Exclusion created (without XML). updateDefinition failed — use update_edr_rule_exclusion_definition tool to set XML manually.",
+              exclusionUuid: uuid,
+              updateError: String(updateError),
+              createResult,
+            });
+          }
+        } catch (noXmlError) {
+          // Strategy 2 also failed — return both errors for diagnosis
+          return json({
+            error: "All creation strategies failed.",
+            directCreationError: errMsg,
+            noXmlCreationError: String(noXmlError),
+            hint: "The API may be blocking the request. Check WAF logs or try creating the exclusion via the ESET PROTECT console.",
+          });
+        }
       }
     },
   );
