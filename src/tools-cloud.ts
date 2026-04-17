@@ -354,8 +354,32 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       if (note) exclusion.note = note;
       if (parsedScopes) exclusion.scopes = parsedScopes;
 
-      const result = await client.createEdrRuleExclusion({ exclusion });
-      return json(result);
+      const payload = { exclusion };
+      // Debug: log exact payload to stderr so users can see what's sent
+      const payloadJson = JSON.stringify(payload);
+      process.stderr.write(`[eset-mcp] create_edr_rule_exclusion payload (${payloadJson.length} bytes): ${payloadJson.substring(0, 500)}\n`);
+
+      try {
+        const result = await client.createEdrRuleExclusion(payload);
+        return json(result);
+      } catch (err) {
+        const errMsg = String(err);
+        process.stderr.write(`[eset-mcp] create_edr_rule_exclusion error: ${errMsg}\n`);
+        // Return structured error instead of throwing — helps AI see what went wrong
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: errMsg,
+            hint: "Ensure ruleUuids contains valid EDR rule UUIDs (use list_edr_rules) and xmlDefinition is valid ESET Inspect XML.",
+            payloadSent: {
+              exclusionKeys: Object.keys(exclusion),
+              ruleUuidsCount: ruleUuids.length,
+              xmlDefinitionLength: xmlDefinition.length,
+              xmlDefinitionPreview: xmlDefinition.substring(0, 100),
+            },
+          }, null, 2) }],
+          isError: true,
+        };
+      }
     },
   );
 

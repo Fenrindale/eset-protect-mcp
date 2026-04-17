@@ -735,7 +735,15 @@ export class EsetClient {
         res.on("end", () => {
           const data = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`ESET API error ${res.statusCode}: ${data}`));
+            const detail = [
+              `ESET API error ${res.statusCode}`,
+              data ? `body=${data.substring(0, 500)}` : "body=(empty)",
+              `method=${method}`,
+              `path=${path}`,
+              body ? `reqBodyLen=${body.length}` : "",
+              res.headers["x-request-id"] ? `x-request-id=${res.headers["x-request-id"]}` : "",
+            ].filter(Boolean).join(" | ");
+            reject(new Error(detail));
           } else {
             resolve(data);
           }
