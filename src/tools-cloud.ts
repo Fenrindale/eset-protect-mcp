@@ -298,43 +298,88 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_edr_rule_exclusions",
-    "List EDR rule exclusions (ESET Inspect exclusions)",
+    "List EDR rule exclusions (ESET Inspect exclusions). " +
+    "Returns exclusions with uuid, displayName, enabled, xmlDefinition, ruleUuids, scopes, note, authorUuid, editorUuid. " +
+    "Use this to find exclusion UUIDs for get/update/delete operations.",
     {
-      pageSize: z.number().optional().describe("Results per page"),
-      pageToken: z.string().optional().describe("Token for next page"),
+      pageSize: z.number().optional().describe("Results per page (default 50, max 1000)"),
+      pageToken: z.string().optional().describe("Token for next page from previous response's nextPageToken"),
     },
     async ({ pageSize, pageToken }) => json(await client.listEdrRuleExclusions(pageSize, pageToken)),
   );
 
   server.tool(
     "create_edr_rule_exclusion",
-    "Create a new EDR rule exclusion",
-    { exclusionData: z.string().describe("JSON string of exclusion definition") },
-    async ({ exclusionData }) => json(await client.createEdrRuleExclusion(JSON.parse(exclusionData))),
+    "Create an EDR rule exclusion (ESET Inspect exclusion). " +
+    "An EDR rule exclusion patches one or more EDR rules so they do NOT trigger their action on matching activity. " +
+    "Exclusions use the same XML definition format as EDR rules (https://help.eset.com/ei_rules/latest/en-US/) but actions in the XML are ignored. " +
+    "The exclusion is wrapped in an 'exclusion' envelope automatically — just provide the fields directly.",
+    {
+      enabled: z.boolean().describe(
+        "Whether the exclusion should be active immediately. true = exclusion is enforced, false = created but inactive."
+      ),
+      xmlDefinition: z.string().describe(
+        "XML definition of the EDR rule exclusion. Uses the ESET Inspect rules XML format " +
+        "(spec: https://help.eset.com/ei_rules/latest/en-US/). Actions in the XML are ignored for exclusions. " +
+        "The displayName is derived from <description><name>...</name></description> inside the XML. " +
+        "Example minimal structure: " +
+        "'<rule><description><name>Exclude MyApp</name></description>" +
+        "<definition><conditions><condition component=\"FileOperations\" operation=\"CreateFile\">" +
+        "<operand name=\"FilePath\" type=\"String\" condition=\"is\">C:\\\\MyApp\\\\*</operand>" +
+        "</condition></conditions></definition></rule>'"
+      ),
+      ruleUuids: z.array(z.string()).optional().describe(
+        "Array of EDR rule UUIDs that this exclusion should apply to. " +
+        "Use list_edr_rules to find rule UUIDs. If omitted, the exclusion may apply broadly."
+      ),
+      note: z.string().optional().describe(
+        "Optional user note explaining the exclusion purpose. Maximum 2048 characters."
+      ),
+      scopes: z.string().optional().describe(
+        "Optional JSON string of scopes array to limit where this exclusion applies. " +
+        "Each scope object can have 'deviceUuid' and/or 'deviceGroupUuid'. " +
+        "Example: '[{\"deviceUuid\":\"abc-123\"},{\"deviceGroupUuid\":\"def-456\"}]'. " +
+        "If omitted, the exclusion applies globally. Use list_devices or list_device_groups to find UUIDs."
+      ),
+    },
+    async ({ enabled, xmlDefinition, ruleUuids, note, scopes }) => {
+      const exclusion: Record<string, unknown> = { enabled, xmlDefinition };
+      if (ruleUuids) exclusion.ruleUuids = ruleUuids;
+      if (note) exclusion.note = note;
+      if (scopes) exclusion.scopes = JSON.parse(scopes);
+      return json(await client.createEdrRuleExclusion({ exclusion }));
+    },
   );
 
   server.tool(
     "get_edr_rule_exclusion",
-    "Get details of a specific EDR rule exclusion",
-    { exclusionUuid: z.string().describe("UUID of the exclusion") },
+    "Get full details of a specific EDR rule exclusion including its XML definition, enabled state, scopes, and linked rule UUIDs.",
+    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion. Use list_edr_rule_exclusions to find it.") },
     async ({ exclusionUuid }) => json(await client.getEdrRuleExclusion(exclusionUuid)),
   );
 
   server.tool(
     "delete_edr_rule_exclusion",
-    "Delete an EDR rule exclusion",
-    { exclusionUuid: z.string().describe("UUID of the exclusion to delete") },
+    "Delete an EDR rule exclusion. This permanently removes the exclusion — the associated EDR rules will resume triggering on previously excluded activity.",
+    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to delete. Use list_edr_rule_exclusions to find it.") },
     async ({ exclusionUuid }) => json(await client.deleteEdrRuleExclusion(exclusionUuid)),
   );
 
   server.tool(
     "update_edr_rule_exclusion_definition",
-    "Update the definition of an EDR rule exclusion",
+    "Update the XML definition of an existing EDR rule exclusion. " +
+    "The XML follows the ESET Inspect rules format (https://help.eset.com/ei_rules/latest/en-US/) — actions are ignored for exclusions. " +
+    "The exclusion's displayName will be updated from the <description><name> element in the new XML.",
     {
-      exclusionUuid: z.string().describe("UUID of the exclusion"),
-      definitionData: z.string().describe("JSON string of updated exclusion definition"),
+      exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to update. Use list_edr_rule_exclusions to find it."),
+      xmlDefinition: z.string().describe(
+        "New XML definition of the EDR rule exclusion. Uses the ESET Inspect rules XML format " +
+        "(spec: https://help.eset.com/ei_rules/latest/en-US/). Actions in the XML are ignored. " +
+        "Must be valid XML according to the specification. " +
+        "The displayName is derived from <description><name>...</name></description> inside the XML."
+      ),
     },
-    async ({ exclusionUuid, definitionData }) => json(await client.updateEdrRuleExclusionDefinition(exclusionUuid, JSON.parse(definitionData))),
+    async ({ exclusionUuid, xmlDefinition }) => json(await client.updateEdrRuleExclusionDefinition(exclusionUuid, { xmlDefinition })),
   );
 
   // ── Incidents ─────────────────────────────────────────────────────
