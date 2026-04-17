@@ -1,7 +1,7 @@
 {
   "name": "eset-protect-mcp",
-  "version": "1.0.0",
-  "description": "Model Context Protocol (MCP) server for ESET PROTECT On-Prem REST API - manage devices, device groups, policies, and policy assignments",
+  "version": "1.1.0",
+  "description": "Model Context Protocol (MCP) server for ESET PROTECT (On-Prem & Cloud) — manage devices, policies, detections, incidents, quarantine, and more via ESET REST API and ESET Connect",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

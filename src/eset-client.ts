@@ -1,26 +1,54 @@
 /**
- * ESET PROTECT On-Prem REST API Client
+ * ESET PROTECT REST API Client — supports both On-Prem and Cloud (ESET Connect)
  *
- * Handles authentication and API calls to the ESET PROTECT server.
- * Reference: https://help.eset.com/protect_admin/latest/en-US/api.html
+ * On-Prem:  https://help.eset.com/protect_admin/latest/en-US/api.html
+ * Cloud:    https://help.eset.com/eset_connect/en-US/swagger_api.html
  */
 
 import https from "node:https";
 import http from "node:http";
 
-export interface EsetConfig {
-  serverUrl: string; // e.g. https://protect_server:9443
+// ─── Configuration types ────────────────────────────────────────────
+
+export type EsetRegion = "eu" | "de" | "us" | "jpn" | "ca";
+
+export interface OnPremConfig {
+  mode: "onprem";
+  serverUrl: string;
   username: string;
   password: string;
-  /** Set to false to allow self-signed certificates (default: true) */
   verifySsl?: boolean;
 }
 
-interface TokenResponse {
-  accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
+export interface CloudConfig {
+  mode: "cloud";
+  region: EsetRegion;
+  username: string;
+  password: string;
 }
+
+export type EsetConfig = OnPremConfig | CloudConfig;
+
+// ─── Cloud domain map ───────────────────────────────────────────────
+
+const CLOUD_DOMAINS: Record<string, string> = {
+  authentication: "business-account.iam",
+  "device-management": "device-management",
+  "policy-management": "policy-management",
+  "incident-management": "incident-management",
+  "installer-management": "installer-management",
+  "application-management": "application-management",
+  "quarantine-management": "quarantine-management",
+  automation: "automation",
+};
+
+function cloudBaseUrl(region: EsetRegion, category: string): string {
+  const domain = CLOUD_DOMAINS[category];
+  if (!domain) throw new Error(`Unknown cloud API category: ${category}`);
+  return `https://${region}.${domain}.eset.systems`;
+}
+
+// ─── Client ─────────────────────────────────────────────────────────
 
 export class EsetClient {
   private config: EsetConfig;
@@ -28,34 +56,54 @@ export class EsetClient {
   private tokenExpiry: number = 0;
 
   constructor(config: EsetConfig) {
-    this.config = {
-      ...config,
-      serverUrl: config.serverUrl.replace(/\/+$/, ""),
-    };
+    if (config.mode === "onprem") {
+      config.serverUrl = config.serverUrl.replace(/\/+$/, "");
+    }
+    this.config = config;
   }
 
-  // ──────────────────────────────────────────────
-  // Authentication
-  // ──────────────────────────────────────────────
+  get isCloud(): boolean {
+    return this.config.mode === "cloud";
+  }
+
+  // ── Authentication ────────────────────────────────────────────────
 
   async authenticate(): Promise<void> {
+    if (this.config.mode === "onprem") {
+      await this.authOnPrem();
+    } else {
+      await this.authCloud();
+    }
+  }
+
+  private async authOnPrem(): Promise<void> {
+    const cfg = this.config as OnPremConfig;
     const body = JSON.stringify({
-      username: this.config.username,
-      password: this.config.password,
+      username: cfg.username,
+      password: cfg.password,
       grant_type: "password",
     });
-
-    const res = await this.rawRequest("POST", "/GetTokens", body, false);
-    const data = JSON.parse(res) as TokenResponse;
-
-    if (!data.accessToken) {
-      throw new Error(
-        `Authentication failed: no accessToken in response. Response: ${res}`
-      );
-    }
-
+    const res = await this.rawRequest("POST", cfg.serverUrl, "/GetTokens", body, "application/json", false);
+    const data = JSON.parse(res);
+    if (!data.accessToken) throw new Error(`Authentication failed: ${res}`);
     this.accessToken = data.accessToken;
     this.tokenExpiry = Date.now() + (data.expiresIn ?? 3600) * 1000 - 60_000;
+  }
+
+  private async authCloud(): Promise<void> {
+    const cfg = this.config as CloudConfig;
+    const authUrl = cloudBaseUrl(cfg.region, "authentication");
+    const body = new URLSearchParams({
+      grant_type: "password",
+      username: cfg.username,
+      password: cfg.password,
+    }).toString();
+    const res = await this.rawRequest("POST", authUrl, "/oauth/token", body, "application/x-www-form-urlencoded", false);
+    const data = JSON.parse(res);
+    const token = data.access_token ?? data.accessToken;
+    if (!token) throw new Error(`Cloud authentication failed: ${res}`);
+    this.accessToken = token;
+    this.tokenExpiry = Date.now() + (data.expires_in ?? data.expiresIn ?? 3600) * 1000 - 60_000;
   }
 
   private async ensureAuth(): Promise<void> {
@@ -64,154 +112,247 @@ export class EsetClient {
     }
   }
 
-  // ──────────────────────────────────────────────
-  // Devices
-  // ──────────────────────────────────────────────
+  private baseUrl(cloudCategory: string): string {
+    if (this.config.mode === "onprem") return (this.config as OnPremConfig).serverUrl;
+    return cloudBaseUrl((this.config as CloudConfig).region, cloudCategory);
+  }
+
+  // ── Devices (On-Prem + Cloud) ─────────────────────────────────────
+
+  async listDevices(pageSize?: number, pageToken?: string): Promise<unknown> {
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("device-management", `/v1/devices${qs}`);
+  }
 
   async getDevice(deviceUuid: string): Promise<unknown> {
-    return this.apiGet(`/v1/devices/${encodeURIComponent(deviceUuid)}`);
+    return this.apiGet("device-management", `/v1/devices/${encodeURIComponent(deviceUuid)}`);
   }
 
   async batchGetDevices(deviceUuids: string[]): Promise<unknown> {
-    const params = deviceUuids
-      .map((id) => `deviceUuids=${encodeURIComponent(id)}`)
-      .join("&");
-    return this.apiGet(`/v1/devices:batchGet?${params}`);
+    const params = deviceUuids.map((id) => `deviceUuids=${encodeURIComponent(id)}`).join("&");
+    return this.apiGet("device-management", `/v1/devices:batchGet?${params}`);
   }
 
-  async moveDevice(
-    deviceUuid: string,
-    newParentUuid: string
-  ): Promise<unknown> {
-    return this.apiPost(
-      `/v1/devices/${encodeURIComponent(deviceUuid)}:move`,
-      { newParentUuid }
-    );
+  async moveDevice(deviceUuid: string, newParentUuid: string): Promise<unknown> {
+    return this.apiPost("device-management", `/v1/devices/${encodeURIComponent(deviceUuid)}:move`, { newParentUuid });
   }
 
-  async renameDevice(
-    deviceUuid: string,
-    newName: string
-  ): Promise<unknown> {
-    return this.apiPost(
-      `/v1/devices/${encodeURIComponent(deviceUuid)}:renameDevice`,
-      { newName }
-    );
+  async renameDevice(deviceUuid: string, newName: string): Promise<unknown> {
+    const action = this.config.mode === "onprem" ? ":renameDevice" : ":rename";
+    return this.apiPost("device-management", `/v1/devices/${encodeURIComponent(deviceUuid)}${action}`, { newName });
   }
 
-  // ──────────────────────────────────────────────
-  // Device Groups
-  // ──────────────────────────────────────────────
+  // ── Device Groups (On-Prem + Cloud) ───────────────────────────────
 
   async listDeviceGroups(): Promise<unknown> {
-    return this.apiGet("/v1/device_groups");
+    return this.apiGet("device-management", "/v1/device_groups");
   }
 
-  async listDevicesInGroup(
-    groupUuid: string,
-    pageSize?: number,
-    pageToken?: string
-  ): Promise<unknown> {
+  async listDevicesInGroup(groupUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     let url = `/v1/device_groups/${encodeURIComponent(groupUuid)}/devices`;
     const params: string[] = [];
-    if (pageSize) params.push(`page_size=${pageSize}`);
-    if (pageToken) params.push(`page_token=${encodeURIComponent(pageToken)}`);
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     if (params.length) url += `?${params.join("&")}`;
-    return this.apiGet(url);
+    return this.apiGet("device-management", url);
   }
 
-  // ──────────────────────────────────────────────
-  // Policies
-  // ──────────────────────────────────────────────
+  // ── Policies (On-Prem + Cloud) ────────────────────────────────────
 
   async listPolicies(): Promise<unknown> {
-    return this.apiGet("/v2/policies");
+    return this.apiGet("policy-management", "/v2/policies");
   }
 
   async getPolicy(policyUuid: string): Promise<unknown> {
-    return this.apiGet(`/v2/policies/${encodeURIComponent(policyUuid)}`);
+    return this.apiGet("policy-management", `/v2/policies/${encodeURIComponent(policyUuid)}`);
   }
 
   async createPolicy(policyData: Record<string, unknown>): Promise<unknown> {
-    return this.apiPost("/v2/policies", policyData);
+    return this.apiPost("policy-management", "/v2/policies", policyData);
   }
 
   async deletePolicy(policyUuid: string): Promise<unknown> {
-    return this.apiDelete(`/v2/policies/${encodeURIComponent(policyUuid)}`);
+    return this.apiDelete("policy-management", `/v2/policies/${encodeURIComponent(policyUuid)}`);
   }
 
-  // ──────────────────────────────────────────────
-  // Policy Assignments
-  // ──────────────────────────────────────────────
+  // ── Policy Assignments (On-Prem + Cloud) ──────────────────────────
 
   async listPolicyAssignments(): Promise<unknown> {
-    return this.apiGet("/v2/policy-assignments");
+    return this.apiGet("policy-management", "/v2/policy-assignments");
   }
 
   async getPolicyAssignment(assignmentUuid: string): Promise<unknown> {
-    return this.apiGet(
-      `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}`
-    );
+    return this.apiGet("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}`);
   }
 
   async assignPolicy(assignmentData: Record<string, unknown>): Promise<unknown> {
-    return this.apiPost("/v2/policy-assignments", assignmentData);
+    return this.apiPost("policy-management", "/v2/policy-assignments", assignmentData);
   }
 
   async unassignPolicy(assignmentUuid: string): Promise<unknown> {
-    return this.apiDelete(
-      `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}`
-    );
+    return this.apiDelete("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}`);
   }
 
-  async updatePolicyAssignmentRanking(
-    assignmentUuid: string,
-    ranking: number
-  ): Promise<unknown> {
-    return this.apiPost(
-      `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}:updateRanking`,
-      { ranking }
-    );
+  async updatePolicyAssignmentRanking(assignmentUuid: string, ranking: number): Promise<unknown> {
+    return this.apiPost("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}:updateRanking`, { ranking });
   }
 
-  // ──────────────────────────────────────────────
-  // HTTP helpers
-  // ──────────────────────────────────────────────
+  // ── Detections (Cloud only) ───────────────────────────────────────
 
-  private async apiGet(path: string): Promise<unknown> {
+  async listDetections(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDetections");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v1/detections${qs}`);
+  }
+
+  async getDetection(detectionUuid: string): Promise<unknown> {
+    this.requireCloud("getDetection");
+    return this.apiGet("incident-management", `/v1/detections/${encodeURIComponent(detectionUuid)}`);
+  }
+
+  async resolveDetection(detectionUuid: string): Promise<unknown> {
+    this.requireCloud("resolveDetection");
+    return this.apiPost("incident-management", `/v2/detections/${encodeURIComponent(detectionUuid)}:resolve`, {});
+  }
+
+  // ── Incidents (Cloud only) ────────────────────────────────────────
+
+  async listIncidents(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listIncidents");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v2/incidents${qs}`);
+  }
+
+  async getIncident(incidentUuid: string): Promise<unknown> {
+    this.requireCloud("getIncident");
+    return this.apiGet("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}`);
+  }
+
+  async closeIncident(incidentUuid: string): Promise<unknown> {
+    this.requireCloud("closeIncident");
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:close`, {});
+  }
+
+  async reopenIncident(incidentUuid: string): Promise<unknown> {
+    this.requireCloud("reopenIncident");
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:reopen`, {});
+  }
+
+  // ── Executables / Application Management (Cloud only) ─────────────
+
+  async listExecutables(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listExecutables");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("application-management", `/v1/executables${qs}`);
+  }
+
+  async getExecutable(executableUuid: string): Promise<unknown> {
+    this.requireCloud("getExecutable");
+    return this.apiGet("application-management", `/v1/executables/${encodeURIComponent(executableUuid)}`);
+  }
+
+  async blockExecutable(executableUuid: string): Promise<unknown> {
+    this.requireCloud("blockExecutable");
+    return this.apiPost("application-management", `/v1/executables/${encodeURIComponent(executableUuid)}:block`, {});
+  }
+
+  async unblockExecutable(executableUuid: string): Promise<unknown> {
+    this.requireCloud("unblockExecutable");
+    return this.apiPost("application-management", `/v1/executables/${encodeURIComponent(executableUuid)}:unblock`, {});
+  }
+
+  // ── Quarantine Management (Cloud only) ────────────────────────────
+
+  async listQuarantinedObjects(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listQuarantinedObjects");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("quarantine-management", `/v1/quarantined-objects${qs}`);
+  }
+
+  async getQuarantinedObject(objectUuid: string): Promise<unknown> {
+    this.requireCloud("getQuarantinedObject");
+    return this.apiGet("quarantine-management", `/v1/quarantined-objects/${encodeURIComponent(objectUuid)}`);
+  }
+
+  async getQuarantineCount(): Promise<unknown> {
+    this.requireCloud("getQuarantineCount");
+    return this.apiGet("quarantine-management", "/v1/quarantined-objects/count");
+  }
+
+  // ── Installer Management (Cloud only) ─────────────────────────────
+
+  async listInstallers(): Promise<unknown> {
+    this.requireCloud("listInstallers");
+    return this.apiGet("installer-management", "/v1/installers");
+  }
+
+  async getInstaller(installerUuid: string): Promise<unknown> {
+    this.requireCloud("getInstaller");
+    return this.apiGet("installer-management", `/v1/installers/${encodeURIComponent(installerUuid)}`);
+  }
+
+  async createInstaller(installerData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createInstaller");
+    return this.apiPost("installer-management", "/v1/installers", installerData);
+  }
+
+  async deleteInstaller(installerUuid: string): Promise<unknown> {
+    this.requireCloud("deleteInstaller");
+    return this.apiDelete("installer-management", `/v1/installers/${encodeURIComponent(installerUuid)}`);
+  }
+
+  // ── Internal helpers ──────────────────────────────────────────────
+
+  private requireCloud(method: string): void {
+    if (this.config.mode !== "cloud") {
+      throw new Error(`${method} is only available in cloud mode (ESET Connect). Current mode: onprem`);
+    }
+  }
+
+  private async apiGet(cat: string, path: string): Promise<unknown> {
     await this.ensureAuth();
-    const res = await this.rawRequest("GET", path, undefined, true);
-    return JSON.parse(res);
+    const res = await this.rawRequest("GET", this.baseUrl(cat), path, undefined, "application/json", true);
+    return res ? JSON.parse(res) : {};
   }
 
-  private async apiPost(
-    path: string,
-    body: Record<string, unknown>
-  ): Promise<unknown> {
+  private async apiPost(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
     await this.ensureAuth();
-    const res = await this.rawRequest("POST", path, JSON.stringify(body), true);
+    const res = await this.rawRequest("POST", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
     return res ? JSON.parse(res) : { success: true };
   }
 
-  private async apiDelete(path: string): Promise<unknown> {
+  private async apiDelete(cat: string, path: string): Promise<unknown> {
     await this.ensureAuth();
-    const res = await this.rawRequest("DELETE", path, undefined, true);
+    const res = await this.rawRequest("DELETE", this.baseUrl(cat), path, undefined, "application/json", true);
     return res ? JSON.parse(res) : { success: true };
   }
 
   private rawRequest(
-    method: string,
-    path: string,
-    body?: string,
-    useAuth = false
+    method: string, baseUrl: string, path: string,
+    body?: string, contentType = "application/json", useAuth = false,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
-      const url = new URL(path, this.config.serverUrl);
+      const url = new URL(path, baseUrl);
       const isHttps = url.protocol === "https:";
       const transport = isHttps ? https : http;
 
       const headers: Record<string, string> = {
-        "Content-Type": "application/json",
+        "Content-Type": contentType,
         Accept: "application/json",
       };
       if (useAuth && this.accessToken) {
@@ -221,13 +362,18 @@ export class EsetClient {
         headers["Content-Length"] = Buffer.byteLength(body).toString();
       }
 
+      let rejectUnauthorized = true;
+      if (this.config.mode === "onprem" && (this.config as OnPremConfig).verifySsl === false) {
+        rejectUnauthorized = false;
+      }
+
       const options: https.RequestOptions = {
         method,
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
         path: url.pathname + url.search,
         headers,
-        rejectUnauthorized: this.config.verifySsl !== false,
+        rejectUnauthorized,
       };
 
       const req = transport.request(options, (res) => {
@@ -236,11 +382,7 @@ export class EsetClient {
         res.on("end", () => {
           const data = Buffer.concat(chunks).toString("utf-8");
           if (res.statusCode && res.statusCode >= 400) {
-            reject(
-              new Error(
-                `ESET API error ${res.statusCode}: ${data}`
-              )
-            );
+            reject(new Error(`ESET API error ${res.statusCode}: ${data}`));
           } else {
             resolve(data);
           }
