@@ -313,7 +313,8 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "Create an EDR rule exclusion (ESET Inspect exclusion). " +
     "An EDR rule exclusion patches one or more EDR rules so they do NOT trigger their action on matching activity. " +
     "Exclusions use the same XML definition format as EDR rules (https://help.eset.com/ei_rules/latest/en-US/) but actions in the XML are ignored. " +
-    "NOTE: Internally uses a 2-step process (create with placeholder XML, then update with real XML) to avoid WAF false-positive blocks on complex XML payloads.",
+    "IMPORTANT: ruleUuids is REQUIRED by the API — the call will fail without at least one rule UUID. " +
+    "Use list_edr_rules to find rule UUIDs first.",
     {
       enabled: z.boolean().describe(
         "Whether the exclusion should be active immediately. true = exclusion is enforced, false = created but inactive."
@@ -323,14 +324,15 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
         "(spec: https://help.eset.com/ei_rules/latest/en-US/). Actions in the XML are ignored for exclusions. " +
         "The displayName is derived from <description><name>...</name></description> inside the XML. " +
         "Example minimal structure: " +
-        "'<rule><description><name>Exclude MyApp</name></description>" +
-        "<definition><conditions><condition component=\"FileOperations\" operation=\"CreateFile\">" +
-        "<operand name=\"FilePath\" type=\"String\" condition=\"is\">C:\\\\MyApp\\\\*</operand>" +
-        "</condition></conditions></definition></rule>'"
+        "'<rule><description><name>Exclude MyApp</name><category>Exclusion</category></description>" +
+        "<definition><process><operator type=\"OR\">" +
+        "<condition component=\"FileItem\" property=\"FileName\" condition=\"is\" value=\"myapp.exe\" />" +
+        "</operator></process></definition></rule>'"
       ),
-      ruleUuids: z.array(z.string()).optional().describe(
-        "Array of EDR rule UUIDs that this exclusion should apply to. " +
-        "Use list_edr_rules to find rule UUIDs. If omitted, the exclusion may apply broadly."
+      ruleUuids: z.array(z.string()).min(1).describe(
+        "REQUIRED. Array of EDR rule UUIDs that this exclusion applies to. " +
+        "At least one rule UUID must be provided — the API rejects requests without it. " +
+        "Use list_edr_rules to find rule UUIDs."
       ),
       note: z.string().optional().describe(
         "Optional user note explaining the exclusion purpose. Maximum 2048 characters."
@@ -344,65 +346,16 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     },
     async ({ enabled, xmlDefinition, ruleUuids, note, scopes }) => {
       const parsedScopes = scopes ? JSON.parse(scopes) : undefined;
-
-      // Helper to build the exclusion payload
-      const buildExclusion = (xml?: string): Record<string, unknown> => {
-        const exc: Record<string, unknown> = { enabled };
-        if (xml) exc.xmlDefinition = xml;
-        if (ruleUuids) exc.ruleUuids = ruleUuids;
-        if (note) exc.note = note;
-        if (parsedScopes) exc.scopes = parsedScopes;
-        return exc;
+      const exclusion: Record<string, unknown> = {
+        enabled,
+        xmlDefinition,
+        ruleUuids,
       };
+      if (note) exclusion.note = note;
+      if (parsedScopes) exclusion.scopes = parsedScopes;
 
-      // Helper to extract UUID from API response
-      const extractUuid = (result: unknown): string | undefined => {
-        const r = result as Record<string, unknown>;
-        const obj = (r.exclusion ?? r) as Record<string, unknown>;
-        return obj.uuid as string | undefined;
-      };
-
-      // Strategy 1: Direct creation with full XML (single step)
-      try {
-        const result = await client.createEdrRuleExclusion({ exclusion: buildExclusion(xmlDefinition) });
-        return json(result);
-      } catch (directError) {
-        const errMsg = String(directError);
-        // If it's a permission/auth error, don't retry with other strategies
-        if (errMsg.includes("401") || errMsg.includes("403: {")) {
-          throw directError;
-        }
-        // WAF block (403 empty/text or 400 empty) or other error — try 2-step
-
-        // Strategy 2: Create WITHOUT xmlDefinition, then updateDefinition separately
-        try {
-          const createResult = await client.createEdrRuleExclusion({ exclusion: buildExclusion() });
-          const uuid = extractUuid(createResult);
-          if (!uuid) {
-            return json({ error: "Exclusion created but UUID not returned — cannot set XML definition", createResult });
-          }
-          // Now set the real XML via the separate updateDefinition endpoint
-          try {
-            const updateResult = await client.updateEdrRuleExclusionDefinition(uuid, { xmlDefinition });
-            return json(updateResult);
-          } catch (updateError) {
-            return json({
-              warning: "Exclusion created (without XML). updateDefinition failed — use update_edr_rule_exclusion_definition tool to set XML manually.",
-              exclusionUuid: uuid,
-              updateError: String(updateError),
-              createResult,
-            });
-          }
-        } catch (noXmlError) {
-          // Strategy 2 also failed — return both errors for diagnosis
-          return json({
-            error: "All creation strategies failed.",
-            directCreationError: errMsg,
-            noXmlCreationError: String(noXmlError),
-            hint: "The API may be blocking the request. Check WAF logs or try creating the exclusion via the ESET PROTECT console.",
-          });
-        }
-      }
+      const result = await client.createEdrRuleExclusion({ exclusion });
+      return json(result);
     },
   );
 

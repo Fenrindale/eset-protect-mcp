@@ -62,7 +62,7 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "eset-protect-mcp",
-    version: "1.2.3",
+    version: "1.2.4",
   });
 
   // Register tools available in both modes
