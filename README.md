@@ -1,8 +1,16 @@
 # ESET PROTECT MCP Server
 
+[![npm version](https://img.shields.io/npm/v/eset-protect-mcp.svg)](https://www.npmjs.com/package/eset-protect-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/eset-protect-mcp.svg)](https://www.npmjs.com/package/eset-protect-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for **ESET PROTECT** — supports both **On-Prem** and **Cloud (ESET Connect)**.
 
 Manage devices, policies, detections, incidents, quarantine, executables, and installers through natural language with GitHub Copilot, Claude Desktop, or any MCP client.
+
+```bash
+npx -y eset-protect-mcp
+```
 
 ## Features
 
