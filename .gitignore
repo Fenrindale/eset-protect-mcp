@@ -3,5 +3,6 @@ dist/
 *.js.map
 *.d.ts.map
 .env
+.vscode/
 .DS_Store
 Thumbs.db

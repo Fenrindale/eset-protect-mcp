@@ -6,7 +6,7 @@
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for **ESET PROTECT** — supports both **On-Prem** and **Cloud (ESET Connect)**.
 
-Manage devices, policies, detections, incidents, quarantine, executables, and installers through natural language with GitHub Copilot, Claude Desktop, or any MCP client.
+Manage devices, policies, detections, incidents, quarantine, executables, installers, EDR rules, automation tasks, and more through natural language with GitHub Copilot, Claude Desktop, or any MCP client.
 
 ```bash
 npx -y eset-protect-mcp
@@ -23,15 +23,27 @@ npx -y eset-protect-mcp
 | **Policies** | `list_policies`, `get_policy`, `create_policy`, `delete_policy` |
 | **Policy Assignments** | `list_policy_assignments`, `get_policy_assignment`, `assign_policy`, `unassign_policy`, `update_policy_assignment_ranking` |
 
-### Cloud-Only Tools (ESET Connect) — 15 additional tools
+### Cloud-Only Tools (ESET Connect) — 59 additional tools
 
 | Category | Tools |
 |---|---|
-| **Detections** | `list_detections`, `get_detection`, `resolve_detection` |
-| **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident` |
+| **Devices (extra)** | `batch_import_devices` |
+| **Asset Management** | `create_group`, `delete_group`, `move_group`, `rename_group` |
+| **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
+| **Identity** | `list_permissions`, `list_role_assignments`, `assign_role`, `revoke_role`, `create_role`, `delete_role` |
+| **Detections** | `list_detections`, `list_detections_v2`, `get_detection`, `resolve_detection`, `batch_get_detections` |
+| **Detection Groups** | `list_detection_groups`, `get_detection_group`, `resolve_detection_group`, `search_detection_groups` |
+| **EDR Rules** | `list_edr_rules`, `create_edr_rule`, `get_edr_rule`, `delete_edr_rule`, `enable_edr_rule`, `disable_edr_rule`, `update_edr_rule_definition` |
+| **EDR Rule Exclusions** | `list_edr_rule_exclusions`, `create_edr_rule_exclusion`, `get_edr_rule_exclusion`, `delete_edr_rule_exclusion`, `update_edr_rule_exclusion_definition` |
+| **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, `update_incident_attributes` |
+| **Incident Comments** | `list_incident_comments`, `create_incident_comment`, `get_incident_comment`, `delete_incident_comment`, `update_incident_comment_text` |
 | **Executables** | `list_executables`, `get_executable`, `block_executable`, `unblock_executable` |
-| **Quarantine** | `list_quarantined_objects`, `get_quarantined_object`, `get_quarantine_count` |
-| **Installers** | `list_installers`, `get_installer`, `create_installer`, `delete_installer` |
+| **Quarantine** | `list_quarantined_objects`, `get_quarantined_object`, `get_quarantine_count`, `batch_delete_quarantined_objects`, `batch_download_quarantined_objects`, `batch_restore_quarantined_objects`, `download_quarantined_object`, `purge_quarantined_objects`, `restore_quarantined_object` |
+| **Installers** | `list_installers`, `get_installer`, `create_installer`, `delete_installer`, `generate_gpo_sccm_file` |
+| **Mobile Devices** | `batch_activate_mobile_product`, `batch_get_enrollment_links` |
+| **Network Access** | `list_ip_sets`, `get_ip_set`, `update_ip_set` |
+| **Users** | `list_users`, `get_user`, `batch_get_users` |
+| **Web Access** | `list_web_address_rules`, `update_web_address_rule_domains` |
 
 ## Prerequisites
 

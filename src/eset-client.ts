@@ -33,13 +33,19 @@ export type EsetConfig = OnPremConfig | CloudConfig;
 
 const CLOUD_DOMAINS: Record<string, string> = {
   authentication: "business-account.iam",
+  "application-management": "application-management",
+  "asset-management": "asset-management",
+  automation: "automation",
   "device-management": "device-management",
-  "policy-management": "policy-management",
+  identity: "identity",
   "incident-management": "incident-management",
   "installer-management": "installer-management",
-  "application-management": "application-management",
+  "mobile-device-management": "mobile-device-management",
+  "network-access-protection": "network-access-protection",
+  "policy-management": "policy-management",
   "quarantine-management": "quarantine-management",
-  automation: "automation",
+  "user-management": "user-management",
+  "web-access-protection": "web-access-protection",
 };
 
 function cloudBaseUrl(region: EsetRegion, category: string): string {
@@ -145,6 +151,11 @@ export class EsetClient {
     return this.apiPost("device-management", `/v1/devices/${encodeURIComponent(deviceUuid)}${action}`, { newName });
   }
 
+  async batchImportDevices(importData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("batchImportDevices");
+    return this.apiPost("device-management", "/v1/devices:batchImport", importData);
+  }
+
   // ── Device Groups (On-Prem + Cloud) ───────────────────────────────
 
   async listDeviceGroups(): Promise<unknown> {
@@ -200,6 +211,101 @@ export class EsetClient {
     return this.apiPost("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}:updateRanking`, { ranking });
   }
 
+  // ── Asset Management (Cloud only) ─────────────────────────────────
+
+  async createGroup(groupData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createGroup");
+    return this.apiPost("asset-management", "/v1/groups", groupData);
+  }
+
+  async deleteGroup(groupUuid: string): Promise<unknown> {
+    this.requireCloud("deleteGroup");
+    return this.apiDelete("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}`);
+  }
+
+  async moveGroup(groupUuid: string, moveData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("moveGroup");
+    return this.apiPost("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}:move`, moveData);
+  }
+
+  async renameGroup(groupUuid: string, newName: string): Promise<unknown> {
+    this.requireCloud("renameGroup");
+    return this.apiPost("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}:rename`, { newName });
+  }
+
+  // ── Automation / Device Tasks (Cloud only) ────────────────────────
+
+  async listDeviceTasks(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDeviceTasks");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("automation", `/v1/device_tasks${qs}`);
+  }
+
+  async createDeviceTask(taskData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createDeviceTask");
+    return this.apiPost("automation", "/v1/device_tasks", taskData);
+  }
+
+  async getDeviceTask(taskUuid: string): Promise<unknown> {
+    this.requireCloud("getDeviceTask");
+    return this.apiGet("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}`);
+  }
+
+  async deleteDeviceTask(taskUuid: string): Promise<unknown> {
+    this.requireCloud("deleteDeviceTask");
+    return this.apiDelete("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}`);
+  }
+
+  async listDeviceTaskRuns(taskUuid: string): Promise<unknown> {
+    this.requireCloud("listDeviceTaskRuns");
+    return this.apiGet("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}/runs`);
+  }
+
+  async updateDeviceTaskTargets(taskUuid: string, targetData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateDeviceTaskTargets");
+    return this.apiPost("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}:updateTaskTargets`, targetData);
+  }
+
+  async updateDeviceTaskTriggers(taskUuid: string, triggerData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateDeviceTaskTriggers");
+    return this.apiPost("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}:updateTaskTriggers`, triggerData);
+  }
+
+  // ── Identity (Cloud only) ─────────────────────────────────────────
+
+  async listPermissions(): Promise<unknown> {
+    this.requireCloud("listPermissions");
+    return this.apiGet("identity", "/v2/permissions");
+  }
+
+  async listRoleAssignments(): Promise<unknown> {
+    this.requireCloud("listRoleAssignments");
+    return this.apiGet("identity", "/v2/role-assignments");
+  }
+
+  async assignRole(roleData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("assignRole");
+    return this.apiPost("identity", "/v2/role-assignments:assignRole", roleData);
+  }
+
+  async revokeRole(roleData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("revokeRole");
+    return this.apiPost("identity", "/v2/role-assignments:revokeRole", roleData);
+  }
+
+  async createRole(roleData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createRole");
+    return this.apiPost("identity", "/v2/roles", roleData);
+  }
+
+  async deleteRole(roleName: string): Promise<unknown> {
+    this.requireCloud("deleteRole");
+    return this.apiDelete("identity", `/v2/roles/${encodeURIComponent(roleName)}`);
+  }
+
   // ── Detections (Cloud only) ───────────────────────────────────────
 
   async listDetections(pageSize?: number, pageToken?: string): Promise<unknown> {
@@ -219,6 +325,118 @@ export class EsetClient {
   async resolveDetection(detectionUuid: string): Promise<unknown> {
     this.requireCloud("resolveDetection");
     return this.apiPost("incident-management", `/v2/detections/${encodeURIComponent(detectionUuid)}:resolve`, {});
+  }
+
+  async listDetectionsV2(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDetectionsV2");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v2/detections${qs}`);
+  }
+
+  async batchGetDetections(detectionUuids: string[]): Promise<unknown> {
+    this.requireCloud("batchGetDetections");
+    return this.apiPost("incident-management", "/v2/detections:batchGet", { detectionUuids });
+  }
+
+  // ── Detection Groups (Cloud only) ─────────────────────────────────
+
+  async listDetectionGroups(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDetectionGroups");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v2/detection-groups${qs}`);
+  }
+
+  async getDetectionGroup(detectionGroupUuid: string): Promise<unknown> {
+    this.requireCloud("getDetectionGroup");
+    return this.apiGet("incident-management", `/v2/detection-groups/${encodeURIComponent(detectionGroupUuid)}`);
+  }
+
+  async resolveDetectionGroup(detectionGroupUuid: string): Promise<unknown> {
+    this.requireCloud("resolveDetectionGroup");
+    return this.apiPost("incident-management", `/v2/detection-groups/${encodeURIComponent(detectionGroupUuid)}:resolve`, {});
+  }
+
+  async searchDetectionGroups(searchData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("searchDetectionGroups");
+    return this.apiPost("incident-management", "/v2/detection-groups:search", searchData);
+  }
+
+  // ── EDR Rules (Cloud only) ────────────────────────────────────────
+
+  async listEdrRules(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listEdrRules");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v2/edr-rules${qs}`);
+  }
+
+  async createEdrRule(ruleData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createEdrRule");
+    return this.apiPost("incident-management", "/v2/edr-rules", ruleData);
+  }
+
+  async getEdrRule(ruleUuid: string): Promise<unknown> {
+    this.requireCloud("getEdrRule");
+    return this.apiGet("incident-management", `/v2/edr-rules/${encodeURIComponent(ruleUuid)}`);
+  }
+
+  async deleteEdrRule(ruleUuid: string): Promise<unknown> {
+    this.requireCloud("deleteEdrRule");
+    return this.apiDelete("incident-management", `/v2/edr-rules/${encodeURIComponent(ruleUuid)}`);
+  }
+
+  async enableEdrRule(ruleUuid: string): Promise<unknown> {
+    this.requireCloud("enableEdrRule");
+    return this.apiPost("incident-management", `/v2/edr-rules/${encodeURIComponent(ruleUuid)}:enable`, {});
+  }
+
+  async disableEdrRule(ruleUuid: string): Promise<unknown> {
+    this.requireCloud("disableEdrRule");
+    return this.apiPost("incident-management", `/v2/edr-rules/${encodeURIComponent(ruleUuid)}:disable`, {});
+  }
+
+  async updateEdrRuleDefinition(ruleUuid: string, definitionData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateEdrRuleDefinition");
+    return this.apiPost("incident-management", `/v2/edr-rules/${encodeURIComponent(ruleUuid)}:updateDefinition`, definitionData);
+  }
+
+  // ── EDR Rule Exclusions (Cloud only) ──────────────────────────────
+
+  async listEdrRuleExclusions(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listEdrRuleExclusions");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v2/edr-rule-exclusions${qs}`);
+  }
+
+  async createEdrRuleExclusion(exclusionData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createEdrRuleExclusion");
+    return this.apiPost("incident-management", "/v2/edr-rule-exclusions", exclusionData);
+  }
+
+  async getEdrRuleExclusion(exclusionUuid: string): Promise<unknown> {
+    this.requireCloud("getEdrRuleExclusion");
+    return this.apiGet("incident-management", `/v2/edr-rule-exclusions/${encodeURIComponent(exclusionUuid)}`);
+  }
+
+  async deleteEdrRuleExclusion(exclusionUuid: string): Promise<unknown> {
+    this.requireCloud("deleteEdrRuleExclusion");
+    return this.apiDelete("incident-management", `/v2/edr-rule-exclusions/${encodeURIComponent(exclusionUuid)}`);
+  }
+
+  async updateEdrRuleExclusionDefinition(exclusionUuid: string, definitionData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateEdrRuleExclusionDefinition");
+    return this.apiPost("incident-management", `/v2/edr-rule-exclusions/${encodeURIComponent(exclusionUuid)}:updateDefinition`, definitionData);
   }
 
   // ── Incidents (Cloud only) ────────────────────────────────────────
@@ -245,6 +463,38 @@ export class EsetClient {
   async reopenIncident(incidentUuid: string): Promise<unknown> {
     this.requireCloud("reopenIncident");
     return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:reopen`, {});
+  }
+
+  async updateIncidentAttributes(incidentUuid: string, attributeData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateIncidentAttributes");
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/basic-attributes:update`, attributeData);
+  }
+
+  // ── Incident Comments (Cloud only) ────────────────────────────────
+
+  async listIncidentComments(incidentUuid: string): Promise<unknown> {
+    this.requireCloud("listIncidentComments");
+    return this.apiGet("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments`);
+  }
+
+  async createIncidentComment(incidentUuid: string, commentData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createIncidentComment");
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments`, commentData);
+  }
+
+  async getIncidentComment(incidentUuid: string, commentUuid: string): Promise<unknown> {
+    this.requireCloud("getIncidentComment");
+    return this.apiGet("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}`);
+  }
+
+  async deleteIncidentComment(incidentUuid: string, commentUuid: string): Promise<unknown> {
+    this.requireCloud("deleteIncidentComment");
+    return this.apiDelete("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}`);
+  }
+
+  async updateIncidentCommentText(incidentUuid: string, commentUuid: string, textData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateIncidentCommentText");
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}/text:update`, textData);
   }
 
   // ── Executables / Application Management (Cloud only) ─────────────
@@ -294,6 +544,36 @@ export class EsetClient {
     return this.apiGet("quarantine-management", "/v1/quarantined-objects/count");
   }
 
+  async batchDeleteQuarantinedObjects(objectUuids: string[]): Promise<unknown> {
+    this.requireCloud("batchDeleteQuarantinedObjects");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:batchDelete", { objectUuids });
+  }
+
+  async batchDownloadQuarantinedObjects(objectUuids: string[]): Promise<unknown> {
+    this.requireCloud("batchDownloadQuarantinedObjects");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:batchDownload", { objectUuids });
+  }
+
+  async batchRestoreQuarantinedObjects(objectUuids: string[]): Promise<unknown> {
+    this.requireCloud("batchRestoreQuarantinedObjects");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:batchRestore", { objectUuids });
+  }
+
+  async downloadQuarantinedObject(downloadData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("downloadQuarantinedObject");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:download", downloadData);
+  }
+
+  async purgeQuarantinedObjects(purgeData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("purgeQuarantinedObjects");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:purge", purgeData);
+  }
+
+  async restoreQuarantinedObject(restoreData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("restoreQuarantinedObject");
+    return this.apiPost("quarantine-management", "/v1/quarantined-objects:restore", restoreData);
+  }
+
   // ── Installer Management (Cloud only) ─────────────────────────────
 
   async listInstallers(): Promise<unknown> {
@@ -316,6 +596,73 @@ export class EsetClient {
     return this.apiDelete("installer-management", `/v1/installers/${encodeURIComponent(installerUuid)}`);
   }
 
+  async generateGpoSccmFile(generateData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("generateGpoSccmFile");
+    return this.apiPost("installer-management", "/v1/gpo-sccm-files:generate", generateData);
+  }
+
+  // ── Mobile Device Management (Cloud only) ─────────────────────────
+
+  async batchActivateMobileProduct(activationData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("batchActivateMobileProduct");
+    return this.apiPost("mobile-device-management", "/v1/mobile-devices:batchActivateProduct", activationData);
+  }
+
+  async batchGetEnrollmentLinks(enrollmentData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("batchGetEnrollmentLinks");
+    return this.apiPost("mobile-device-management", "/v1/mobile-devices:batchGetEnrollmentLinks", enrollmentData);
+  }
+
+  // ── Network Access Protection (Cloud only) ────────────────────────
+
+  async listIpSets(policyUuid: string): Promise<unknown> {
+    this.requireCloud("listIpSets");
+    return this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets`);
+  }
+
+  async getIpSet(policyUuid: string, ipSetUuid: string): Promise<unknown> {
+    this.requireCloud("getIpSet");
+    return this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}`);
+  }
+
+  async updateIpSet(policyUuid: string, ipSetUuid: string, ipSetData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateIpSet");
+    return this.apiPost("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}:update`, ipSetData);
+  }
+
+  // ── User Management (Cloud only) ──────────────────────────────────
+
+  async listUsers(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listUsers");
+    const params: string[] = [];
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("user-management", `/v1/users${qs}`);
+  }
+
+  async getUser(userUuid: string): Promise<unknown> {
+    this.requireCloud("getUser");
+    return this.apiGet("user-management", `/v1/users/${encodeURIComponent(userUuid)}`);
+  }
+
+  async batchGetUsers(userUuids: string[]): Promise<unknown> {
+    this.requireCloud("batchGetUsers");
+    return this.apiPost("user-management", "/v1/users:batchGetUsers", { userUuids });
+  }
+
+  // ── Web Access Protection (Cloud only) ────────────────────────────
+
+  async listWebAddressRules(policyUuid: string): Promise<unknown> {
+    this.requireCloud("listWebAddressRules");
+    return this.apiGet("web-access-protection", `/v2/policies/${encodeURIComponent(policyUuid)}/web-address-rules`);
+  }
+
+  async updateWebAddressRuleDomains(policyUuid: string, addressRuleUuid: string, domainData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateWebAddressRuleDomains");
+    return this.apiPut("web-access-protection", `/v2/policies/${encodeURIComponent(policyUuid)}/web-address-rules/${encodeURIComponent(addressRuleUuid)}/domains`, domainData);
+  }
+
   // ── Internal helpers ──────────────────────────────────────────────
 
   private requireCloud(method: string): void {
@@ -333,6 +680,12 @@ export class EsetClient {
   private async apiPost(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("POST", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
+    return res ? JSON.parse(res) : { success: true };
+  }
+
+  private async apiPut(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
+    await this.ensureAuth();
+    const res = await this.rawRequest("PUT", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
     return res ? JSON.parse(res) : { success: true };
   }
 
