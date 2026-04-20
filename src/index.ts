@@ -62,8 +62,10 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "eset-protect-mcp",
-    version: "1.3.1",
+    version: "1.3.2",
   });
+
+  process.stderr.write(`[eset-protect-mcp] v1.3.2 started, mode=${config.mode}\n`);
 
   // Register tools available in both modes
   registerSharedTools(server, client);

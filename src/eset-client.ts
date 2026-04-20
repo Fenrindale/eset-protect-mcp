@@ -481,6 +481,8 @@ export class EsetClient {
     const body: Record<string, unknown> = {};
     if (closureReason) body.closureReason = closureReason;
     if (finalCommentText) body.finalComment = { text: finalCommentText };
+    const jsonBody = JSON.stringify(body);
+    process.stderr.write(`[closeIncident] uuid=${incidentUuid} bodyLen=${jsonBody.length} body=${jsonBody}\n`);
     return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:close`, body);
   }
 
@@ -814,6 +816,7 @@ export class EsetClient {
               `method=${method}`,
               `path=${path}`,
               body ? `reqBodyLen=${body.length}` : "",
+              body && method === "POST" ? `reqBody=${body.substring(0, 300)}` : "",
               res.headers["x-request-id"] ? `x-request-id=${res.headers["x-request-id"]}` : "",
             ].filter(Boolean).join(" | ");
             reject(new Error(detail));
