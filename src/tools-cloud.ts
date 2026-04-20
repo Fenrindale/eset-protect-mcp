@@ -93,8 +93,15 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   server.tool(
     "list_device_task_runs",
     "List execution runs of a device task",
-    { taskUuid: z.string().describe("UUID of the task") },
-    async ({ taskUuid }) => json(await client.listDeviceTaskRuns(taskUuid)),
+    {
+      taskUuid: z.string().describe("UUID of the task"),
+      deviceUuid: z.string().optional().describe("Filter: only runs on this specific device UUID"),
+      listOnlyLastRuns: z.boolean().optional().describe("If true, only return the latest run per device"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken }) =>
+      json(await client.listDeviceTaskRuns(taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken)),
   );
 
   server.tool(
@@ -165,22 +172,30 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_detections",
-    "List security detections v1 (ESET PROTECT)",
+    "List security detections v1 (ESET PROTECT). Supports filtering by device and time range.",
     {
+      deviceUuid: z.string().optional().describe("Filter: only detections on this device UUID"),
+      startTime: z.string().optional().describe("Include detections after this time (inclusive). ISO 8601 format, e.g. 2024-10-30T12:00Z"),
+      endTime: z.string().optional().describe("Include detections before this time (exclusive). ISO 8601 format, e.g. 2024-10-31T12:00Z"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listDetections(pageSize, pageToken)),
+    async ({ deviceUuid, startTime, endTime, pageSize, pageToken }) =>
+      json(await client.listDetections(deviceUuid, startTime, endTime, pageSize, pageToken)),
   );
 
   server.tool(
     "list_detections_v2",
-    "List security detections v2 (ESET Inspect / Cloud Office Security)",
+    "List security detections v2 (ESET Inspect / Cloud Office Security). Supports filtering by cloud office tenant and time range.",
     {
+      cloudOfficeTenantUuid: z.string().optional().describe("Filter: only detections from this cloud office tenant UUID. Leave empty for device detections."),
+      startTime: z.string().optional().describe("Include detections after this time (inclusive). ISO 8601 format, e.g. 2024-10-30T12:00Z"),
+      endTime: z.string().optional().describe("Include detections before this time (exclusive). ISO 8601 format, e.g. 2024-10-31T12:00Z"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listDetectionsV2(pageSize, pageToken)),
+    async ({ cloudOfficeTenantUuid, startTime, endTime, pageSize, pageToken }) =>
+      json(await client.listDetectionsV2(cloudOfficeTenantUuid, startTime, endTime, pageSize, pageToken)),
   );
 
   server.tool(
@@ -208,12 +223,17 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_detection_groups",
-    "List detection groups",
+    "List detection groups. Supports filtering by cloud office tenant, device, and time range.",
     {
+      cloudOfficeTenantUuid: z.string().optional().describe("Filter: only detection groups from this cloud office tenant. Leave empty for device detections."),
+      deviceUuid: z.string().optional().describe("Filter: only detection groups for this device UUID. Leave empty for cloud office detections."),
+      startTime: z.string().optional().describe("Include detections after this time (inclusive). ISO 8601 format, e.g. 2024-10-30T12:00Z"),
+      endTime: z.string().optional().describe("Include detections before this time (exclusive). ISO 8601 format, e.g. 2024-10-31T12:00Z"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listDetectionGroups(pageSize, pageToken)),
+    async ({ cloudOfficeTenantUuid, deviceUuid, startTime, endTime, pageSize, pageToken }) =>
+      json(await client.listDetectionGroups(cloudOfficeTenantUuid, deviceUuid, startTime, endTime, pageSize, pageToken)),
   );
 
   server.tool(
@@ -241,12 +261,17 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_edr_rules",
-    "List EDR (Endpoint Detection and Response) rules",
+    "List EDR (Endpoint Detection and Response) rules. Supports filtering by severity level.",
     {
+      severityLevel: z.string().optional().describe(
+        'Filter by severity. Values: SEVERITY_LEVEL_UNSPECIFIED, SEVERITY_LEVEL_DIAGNOSTIC, SEVERITY_LEVEL_INFORMATIONAL, SEVERITY_LEVEL_LOW, SEVERITY_LEVEL_MEDIUM, SEVERITY_LEVEL_HIGH'
+      ),
+      includeTotalSize: z.boolean().optional().describe("If true, includes total_size count in response"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listEdrRules(pageSize, pageToken)),
+    async ({ severityLevel, includeTotalSize, pageSize, pageToken }) =>
+      json(await client.listEdrRules(severityLevel, includeTotalSize, pageSize, pageToken)),
   );
 
   server.tool(
@@ -302,10 +327,11 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "Returns exclusions with uuid, displayName, enabled, xmlDefinition, ruleUuids, scopes, note, authorUuid, editorUuid. " +
     "Use this to find exclusion UUIDs for get/update/delete operations.",
     {
+      includeTotalSize: z.boolean().optional().describe("If true, includes total_size count in response"),
       pageSize: z.number().optional().describe("Results per page (default 50, max 1000)"),
       pageToken: z.string().optional().describe("Token for next page from previous response's nextPageToken"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listEdrRuleExclusions(pageSize, pageToken)),
+    async ({ includeTotalSize, pageSize, pageToken }) => json(await client.listEdrRuleExclusions(includeTotalSize, pageSize, pageToken)),
   );
 
   server.tool(
@@ -547,12 +573,36 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_quarantined_objects",
-    "List quarantined objects",
+    "List quarantined objects. Supports extensive filtering by file name, origin, type, quarantine reason, time range, email fields, and sorting. " +
+    "objectOrigin values: OBJECT_ORIGIN_MS_OFFICE365, OBJECT_ORIGIN_GOOGLE_WORKSPACE, OBJECT_ORIGIN_DEVICE. " +
+    "objectType values: EMAIL_MESSAGE, EMAIL_ATTACHMENT, FILE_ON_DRIVE. " +
+    "quarantineReason values: MALWARE, GRAYWARE, PHISHING, SPAM, SENDER_SPOOFING, RULE.",
     {
+      fileName: z.string().optional().describe("Filter by quarantined file name (suffix match)"),
+      objectOrigin: z.string().optional().describe("Filter by origin: OBJECT_ORIGIN_MS_OFFICE365, OBJECT_ORIGIN_GOOGLE_WORKSPACE, OBJECT_ORIGIN_DEVICE"),
+      objectType: z.string().optional().describe("Filter by type: EMAIL_MESSAGE, EMAIL_ATTACHMENT, FILE_ON_DRIVE"),
+      quarantineReason: z.string().optional().describe("Filter by reason: MALWARE, GRAYWARE, PHISHING, SPAM, SENDER_SPOOFING, RULE"),
+      quarantineTimeStartTime: z.string().optional().describe("Filter: quarantine time start (inclusive). ISO 8601, e.g. 2024-10-30T12:00Z"),
+      quarantineTimeEndTime: z.string().optional().describe("Filter: quarantine time end (exclusive). ISO 8601, e.g. 2024-10-31T12:00Z"),
+      userUuid: z.string().optional().describe("Filter by user UUID who owns the storage"),
+      cloudOfficeTenantUuid: z.string().optional().describe("Filter by cloud office tenant UUID"),
+      emailSender: z.string().optional().describe("Filter by email sender address"),
+      emailRecipient: z.string().optional().describe("Filter by email recipient address"),
+      emailSubject: z.string().optional().describe("Filter by email subject (contains match)"),
+      emailInternetMessageId: z.string().optional().describe("Filter by email Message-ID"),
+      msSharepointRootSiteUuid: z.string().optional().describe("Filter by SharePoint root site UUID"),
+      msTeamsTeamUuid: z.string().optional().describe("Filter by MS Teams team UUID"),
+      orderBy: z.string().optional().describe('Comma-separated sort fields with optional " desc" suffix'),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listQuarantinedObjects(pageSize, pageToken)),
+    async ({ fileName, objectOrigin, objectType, quarantineReason, quarantineTimeStartTime, quarantineTimeEndTime, userUuid, cloudOfficeTenantUuid, emailSender, emailRecipient, emailSubject, emailInternetMessageId, msSharepointRootSiteUuid, msTeamsTeamUuid, orderBy, pageSize, pageToken }) =>
+      json(await client.listQuarantinedObjects({
+        fileName, objectOrigin, objectType, quarantineReason,
+        quarantineTimeStartTime, quarantineTimeEndTime, userUuid,
+        cloudOfficeTenantUuid, emailSender, emailRecipient, emailSubject,
+        emailInternetMessageId, msSharepointRootSiteUuid, msTeamsTeamUuid,
+      }, orderBy, pageSize, pageToken)),
   );
 
   server.tool(
@@ -699,12 +749,20 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_users",
-    "List users (ESET Cloud Office Security)",
+    "List users (ESET Cloud Office Security). Supports filtering by display name, email, protection status, user group, tenant, and license. " +
+    "protectionStatus values: UNPROTECTED, PENDING, PARTIALLY_PROTECTED, FULLY_PROTECTED.",
     {
+      displayName: z.string().optional().describe("Filter by display name (partial match)"),
+      email: z.string().optional().describe("Filter by email (partial match across primary + proxy addresses)"),
+      protectionStatus: z.string().optional().describe("Filter by status: UNPROTECTED, PENDING, PARTIALLY_PROTECTED, FULLY_PROTECTED"),
+      userGroupUuid: z.string().optional().describe("Filter by user group UUID"),
+      cloudOfficeTenantReference: z.string().optional().describe("Filter by cloud office tenant reference (exact match)"),
+      hasCloudOfficeMsLicense: z.boolean().optional().describe("Filter by MS cloud office license presence"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listUsers(pageSize, pageToken)),
+    async ({ displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense, pageSize, pageToken }) =>
+      json(await client.listUsers({ displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense }, pageSize, pageToken)),
   );
 
   server.tool(

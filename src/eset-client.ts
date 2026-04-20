@@ -259,9 +259,15 @@ export class EsetClient {
     return this.apiDelete("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}`);
   }
 
-  async listDeviceTaskRuns(taskUuid: string): Promise<unknown> {
+  async listDeviceTaskRuns(taskUuid: string, deviceUuid?: string, listOnlyLastRuns?: boolean, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listDeviceTaskRuns");
-    return this.apiGet("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}/runs`);
+    const params: string[] = [];
+    if (deviceUuid) params.push(`deviceUuid=${encodeURIComponent(deviceUuid)}`);
+    if (listOnlyLastRuns !== undefined) params.push(`listOnlyLastRuns=${listOnlyLastRuns}`);
+    if (pageSize) params.push(`pageSize=${pageSize}`);
+    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}/runs${qs}`);
   }
 
   async updateDeviceTaskTargets(taskUuid: string, targetData: Record<string, unknown>): Promise<unknown> {
@@ -308,9 +314,12 @@ export class EsetClient {
 
   // ── Detections (Cloud only) ───────────────────────────────────────
 
-  async listDetections(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listDetections(deviceUuid?: string, startTime?: string, endTime?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listDetections");
     const params: string[] = [];
+    if (deviceUuid) params.push(`deviceUuid=${encodeURIComponent(deviceUuid)}`);
+    if (startTime) params.push(`startTime=${encodeURIComponent(startTime)}`);
+    if (endTime) params.push(`endTime=${encodeURIComponent(endTime)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -327,9 +336,12 @@ export class EsetClient {
     return this.apiPost("incident-management", `/v2/detections/${encodeURIComponent(detectionUuid)}:resolve`, {});
   }
 
-  async listDetectionsV2(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listDetectionsV2(cloudOfficeTenantUuid?: string, startTime?: string, endTime?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listDetectionsV2");
     const params: string[] = [];
+    if (cloudOfficeTenantUuid) params.push(`cloudOfficeTenantUuid=${encodeURIComponent(cloudOfficeTenantUuid)}`);
+    if (startTime) params.push(`startTime=${encodeURIComponent(startTime)}`);
+    if (endTime) params.push(`endTime=${encodeURIComponent(endTime)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -343,9 +355,13 @@ export class EsetClient {
 
   // ── Detection Groups (Cloud only) ─────────────────────────────────
 
-  async listDetectionGroups(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listDetectionGroups(cloudOfficeTenantUuid?: string, deviceUuid?: string, startTime?: string, endTime?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listDetectionGroups");
     const params: string[] = [];
+    if (cloudOfficeTenantUuid) params.push(`cloudOfficeTenantUuid=${encodeURIComponent(cloudOfficeTenantUuid)}`);
+    if (deviceUuid) params.push(`deviceUuid=${encodeURIComponent(deviceUuid)}`);
+    if (startTime) params.push(`startTime=${encodeURIComponent(startTime)}`);
+    if (endTime) params.push(`endTime=${encodeURIComponent(endTime)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -369,9 +385,11 @@ export class EsetClient {
 
   // ── EDR Rules (Cloud only) ────────────────────────────────────────
 
-  async listEdrRules(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listEdrRules(severityLevel?: string, includeTotalSize?: boolean, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listEdrRules");
     const params: string[] = [];
+    if (severityLevel) params.push(`severityLevel=${encodeURIComponent(severityLevel)}`);
+    if (includeTotalSize !== undefined) params.push(`includeTotalSize=${includeTotalSize}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -410,9 +428,10 @@ export class EsetClient {
 
   // ── EDR Rule Exclusions (Cloud only) ──────────────────────────────
 
-  async listEdrRuleExclusions(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listEdrRuleExclusions(includeTotalSize?: boolean, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listEdrRuleExclusions");
     const params: string[] = [];
+    if (includeTotalSize !== undefined) params.push(`includeTotalSize=${includeTotalSize}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -527,9 +546,41 @@ export class EsetClient {
 
   // ── Quarantine Management (Cloud only) ────────────────────────────
 
-  async listQuarantinedObjects(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listQuarantinedObjects(filters?: {
+    cloudOfficeTenantUuid?: string;
+    emailInternetMessageId?: string;
+    emailRecipient?: string;
+    emailSender?: string;
+    emailSubject?: string;
+    fileName?: string;
+    msSharepointRootSiteUuid?: string;
+    msTeamsTeamUuid?: string;
+    objectOrigin?: string;
+    objectType?: string;
+    quarantineReason?: string;
+    quarantineTimeStartTime?: string;
+    quarantineTimeEndTime?: string;
+    userUuid?: string;
+  }, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listQuarantinedObjects");
     const params: string[] = [];
+    if (filters) {
+      if (filters.cloudOfficeTenantUuid) params.push(`filter.cloudOfficeTenantUuid=${encodeURIComponent(filters.cloudOfficeTenantUuid)}`);
+      if (filters.emailInternetMessageId) params.push(`filter.emailInternetMessageId=${encodeURIComponent(filters.emailInternetMessageId)}`);
+      if (filters.emailRecipient) params.push(`filter.emailRecipient=${encodeURIComponent(filters.emailRecipient)}`);
+      if (filters.emailSender) params.push(`filter.emailSender=${encodeURIComponent(filters.emailSender)}`);
+      if (filters.emailSubject) params.push(`filter.emailSubject=${encodeURIComponent(filters.emailSubject)}`);
+      if (filters.fileName) params.push(`filter.fileName=${encodeURIComponent(filters.fileName)}`);
+      if (filters.msSharepointRootSiteUuid) params.push(`filter.msSharepointRootSiteUuid=${encodeURIComponent(filters.msSharepointRootSiteUuid)}`);
+      if (filters.msTeamsTeamUuid) params.push(`filter.msTeamsTeamUuid=${encodeURIComponent(filters.msTeamsTeamUuid)}`);
+      if (filters.objectOrigin) params.push(`filter.objectOrigin=${encodeURIComponent(filters.objectOrigin)}`);
+      if (filters.objectType) params.push(`filter.objectType=${encodeURIComponent(filters.objectType)}`);
+      if (filters.quarantineReason) params.push(`filter.quarantineReason=${encodeURIComponent(filters.quarantineReason)}`);
+      if (filters.quarantineTimeStartTime) params.push(`filter.quarantineTime.startTime=${encodeURIComponent(filters.quarantineTimeStartTime)}`);
+      if (filters.quarantineTimeEndTime) params.push(`filter.quarantineTime.endTime=${encodeURIComponent(filters.quarantineTimeEndTime)}`);
+      if (filters.userUuid) params.push(`filter.userUuid=${encodeURIComponent(filters.userUuid)}`);
+    }
+    if (orderBy) params.push(`orderBy=${encodeURIComponent(orderBy)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
@@ -634,9 +685,24 @@ export class EsetClient {
 
   // ── User Management (Cloud only) ──────────────────────────────────
 
-  async listUsers(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listUsers(filters?: {
+    displayName?: string;
+    email?: string;
+    protectionStatus?: string;
+    userGroupUuid?: string;
+    cloudOfficeTenantReference?: string;
+    hasCloudOfficeMsLicense?: boolean;
+  }, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listUsers");
     const params: string[] = [];
+    if (filters) {
+      if (filters.displayName) params.push(`displayName=${encodeURIComponent(filters.displayName)}`);
+      if (filters.email) params.push(`email=${encodeURIComponent(filters.email)}`);
+      if (filters.protectionStatus) params.push(`protectionStatus=${encodeURIComponent(filters.protectionStatus)}`);
+      if (filters.userGroupUuid) params.push(`userGroupUuid=${encodeURIComponent(filters.userGroupUuid)}`);
+      if (filters.cloudOfficeTenantReference) params.push(`cloudOfficeTenantReference=${encodeURIComponent(filters.cloudOfficeTenantReference)}`);
+      if (filters.hasCloudOfficeMsLicense !== undefined) params.push(`hasCloudOfficeMsLicense=${filters.hasCloudOfficeMsLicense}`);
+    }
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
