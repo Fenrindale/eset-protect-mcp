@@ -463,12 +463,12 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "close_incident",
-    "Close a security incident. Requires a closureReason. " +
+    "Close a security incident. closureReason is REQUIRED. " +
     "closureReason values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS.",
     {
       incidentUuid: z.string().describe("UUID of the incident to close"),
-      closureReason: z.string().optional().describe(
-        'Reason for closing. Values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS'
+      closureReason: z.string().describe(
+        'REQUIRED. Reason for closing. Values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS'
       ),
       finalComment: z.string().optional().describe("Optional closing comment text explaining why/how the incident was resolved"),
     },
