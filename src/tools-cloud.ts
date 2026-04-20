@@ -463,16 +463,26 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "close_incident",
-    "Close a security incident",
-    { incidentUuid: z.string().describe("UUID of the incident to close") },
-    async ({ incidentUuid }) => json(await client.closeIncident(incidentUuid)),
+    "Close a security incident. Requires a closureReason. " +
+    "closureReason values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS.",
+    {
+      incidentUuid: z.string().describe("UUID of the incident to close"),
+      closureReason: z.string().optional().describe(
+        'Reason for closing. Values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS'
+      ),
+      finalComment: z.string().optional().describe("Optional closing comment text explaining why/how the incident was resolved"),
+    },
+    async ({ incidentUuid, closureReason, finalComment }) => json(await client.closeIncident(incidentUuid, closureReason, finalComment)),
   );
 
   server.tool(
     "reopen_incident",
-    "Reopen a previously closed incident",
-    { incidentUuid: z.string().describe("UUID of the incident to reopen") },
-    async ({ incidentUuid }) => json(await client.reopenIncident(incidentUuid)),
+    "Reopen a previously closed incident. Optionally include a comment explaining why.",
+    {
+      incidentUuid: z.string().describe("UUID of the incident to reopen"),
+      comment: z.string().optional().describe("Optional comment text explaining why the incident is being reopened"),
+    },
+    async ({ incidentUuid, comment }) => json(await client.reopenIncident(incidentUuid, comment)),
   );
 
   server.tool(

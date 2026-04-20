@@ -476,14 +476,19 @@ export class EsetClient {
     return this.apiGet("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}`);
   }
 
-  async closeIncident(incidentUuid: string): Promise<unknown> {
+  async closeIncident(incidentUuid: string, closureReason?: string, finalCommentText?: string): Promise<unknown> {
     this.requireCloud("closeIncident");
-    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:close`, {});
+    const body: Record<string, unknown> = {};
+    if (closureReason) body.closureReason = closureReason;
+    if (finalCommentText) body.finalComment = { text: finalCommentText };
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:close`, body);
   }
 
-  async reopenIncident(incidentUuid: string): Promise<unknown> {
+  async reopenIncident(incidentUuid: string, commentText?: string): Promise<unknown> {
     this.requireCloud("reopenIncident");
-    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:reopen`, {});
+    const body: Record<string, unknown> = {};
+    if (commentText) body.comment = { text: commentText };
+    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:reopen`, body);
   }
 
   async updateIncidentAttributes(incidentUuid: string, attributeData: Record<string, unknown>): Promise<unknown> {
