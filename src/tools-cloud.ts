@@ -418,12 +418,14 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_incidents",
-    "List security incidents",
+    "List security incidents. Supports CEL filter syntax, e.g. status==\"INCIDENT_STATUS_OPEN\", severity==\"INCIDENT_SEVERITY_LEVEL_HIGH\", displayName.contains(\"abc\"). Status values: INCIDENT_STATUS_OPEN, INCIDENT_STATUS_IN_PROGRESS, INCIDENT_STATUS_CLOSED, INCIDENT_STATUS_WAITING_FOR_INPUT. Severity values: INCIDENT_SEVERITY_LEVEL_LOW, INCIDENT_SEVERITY_LEVEL_MEDIUM, INCIDENT_SEVERITY_LEVEL_HIGH.",
     {
+      filter: z.string().optional().describe('CEL filter expression, e.g. status=="INCIDENT_STATUS_OPEN"'),
+      orderBy: z.string().optional().describe('Comma-separated fields with optional " desc" suffix, e.g. "severity desc"'),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listIncidents(pageSize, pageToken)),
+    async ({ filter, orderBy, pageSize, pageToken }) => json(await client.listIncidents(filter, orderBy, pageSize, pageToken)),
   );
 
   server.tool(

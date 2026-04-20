@@ -441,9 +441,11 @@ export class EsetClient {
 
   // ── Incidents (Cloud only) ────────────────────────────────────────
 
-  async listIncidents(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listIncidents(filter?: string, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listIncidents");
     const params: string[] = [];
+    if (filter) params.push(`filter=${encodeURIComponent(filter)}`);
+    if (orderBy) params.push(`orderBy=${encodeURIComponent(orderBy)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
