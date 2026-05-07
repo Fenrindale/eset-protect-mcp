@@ -23,7 +23,7 @@ npx -y eset-protect-mcp
 | **Policies** | `list_policies`, `get_policy`, `create_policy`, `delete_policy` |
 | **Policy Assignments** | `list_policy_assignments`, `get_policy_assignment`, `assign_policy`, `unassign_policy`, `update_policy_assignment_ranking` |
 
-### Cloud-Only Tools (ESET Connect) — 59 additional tools
+### Cloud-Only Tools (ESET Connect) — 77 additional tools
 
 | Category | Tools |
 |---|---|
@@ -44,6 +44,8 @@ npx -y eset-protect-mcp
 | **Network Access** | `list_ip_sets`, `get_ip_set`, `update_ip_set` |
 | **Users** | `list_users`, `get_user`, `batch_get_users` |
 | **Web Access** | `list_web_address_rules`, `update_web_address_rule_domains` |
+
+Incident filters use unquoted enum constants. For example, use `status==INCIDENT_STATUS_OPEN`, not `status=="INCIDENT_STATUS_OPEN"`.
 
 ## Prerequisites
 
@@ -80,6 +82,7 @@ npm run build
 | `ESET_SERVER_URL` | On-Prem only | Server URL (e.g., `https://protect-server:9443`) |
 | `ESET_VERIFY_SSL` | On-Prem only | `false` to allow self-signed certs (default: `true`) |
 | `ESET_REGION` | Cloud only | `eu`, `de`, `us`, `jpn`, or `ca` |
+| `ESET_REQUEST_TIMEOUT_MS` | No | HTTP request timeout in milliseconds (default: `120000`) |
 
 ## Usage with MCP Clients
 

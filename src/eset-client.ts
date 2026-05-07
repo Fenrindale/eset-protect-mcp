@@ -7,6 +7,7 @@
 
 import https from "node:https";
 import http from "node:http";
+import type { IncomingHttpHeaders } from "node:http";
 
 // ─── Configuration types ────────────────────────────────────────────
 
@@ -28,6 +29,25 @@ export interface CloudConfig {
 }
 
 export type EsetConfig = OnPremConfig | CloudConfig;
+
+interface RawResponse {
+  statusCode: number;
+  headers: IncomingHttpHeaders;
+  body: string;
+}
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+const PENDING_RETRY_DELAY_MS = 2_000;
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function requestTimeoutMs(): number {
+  const configured = Number(process.env.ESET_REQUEST_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return DEFAULT_REQUEST_TIMEOUT_MS;
+}
 
 // ─── Cloud domain map ───────────────────────────────────────────────
 
@@ -90,8 +110,8 @@ export class EsetClient {
       grant_type: "password",
     });
     const res = await this.rawRequest("POST", cfg.serverUrl, "/GetTokens", body, "application/json", false);
-    const data = JSON.parse(res);
-    if (!data.accessToken) throw new Error(`Authentication failed: ${res}`);
+    const data = JSON.parse(res.body);
+    if (!data.accessToken) throw new Error(`Authentication failed: ${res.body}`);
     this.accessToken = data.accessToken;
     this.tokenExpiry = Date.now() + (data.expiresIn ?? 3600) * 1000 - 60_000;
   }
@@ -105,9 +125,9 @@ export class EsetClient {
       password: cfg.password,
     }).toString();
     const res = await this.rawRequest("POST", authUrl, "/oauth/token", body, "application/x-www-form-urlencoded", false);
-    const data = JSON.parse(res);
+    const data = JSON.parse(res.body);
     const token = data.access_token ?? data.accessToken;
-    if (!token) throw new Error(`Cloud authentication failed: ${res}`);
+    if (!token) throw new Error(`Cloud authentication failed: ${res.body}`);
     this.accessToken = token;
     this.tokenExpiry = Date.now() + (data.expires_in ?? data.expiresIn ?? 3600) * 1000 - 60_000;
   }
@@ -138,7 +158,7 @@ export class EsetClient {
   }
 
   async batchGetDevices(deviceUuids: string[]): Promise<unknown> {
-    const params = deviceUuids.map((id) => `deviceUuids=${encodeURIComponent(id)}`).join("&");
+    const params = deviceUuids.map((id) => `devicesUuids=${encodeURIComponent(id)}`).join("&");
     return this.apiGet("device-management", `/v1/devices:batchGet?${params}`);
   }
 
@@ -481,8 +501,6 @@ export class EsetClient {
     const body: Record<string, unknown> = {};
     if (closureReason) body.closureReason = closureReason;
     if (finalCommentText) body.finalComment = { text: finalCommentText };
-    const jsonBody = JSON.stringify(body);
-    process.stderr.write(`[closeIncident] uuid=${incidentUuid} bodyLen=${jsonBody.length} body=${jsonBody}\n`);
     return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}:close`, body);
   }
 
@@ -749,32 +767,48 @@ export class EsetClient {
   private async apiGet(cat: string, path: string): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("GET", this.baseUrl(cat), path, undefined, "application/json", true);
-    return res ? JSON.parse(res) : {};
+    return this.parseApiResponse(res, {});
   }
 
   private async apiPost(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("POST", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
-    return res ? JSON.parse(res) : { success: true };
+    return this.parseApiResponse(res, { success: true });
   }
 
   private async apiPut(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("PUT", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
-    return res ? JSON.parse(res) : { success: true };
+    return this.parseApiResponse(res, { success: true });
   }
 
   private async apiDelete(cat: string, path: string): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("DELETE", this.baseUrl(cat), path, undefined, "application/json", true);
-    return res ? JSON.parse(res) : { success: true };
+    return this.parseApiResponse(res, { success: true });
+  }
+
+  private parseApiResponse(res: RawResponse, emptyFallback: unknown): unknown {
+    if (res.statusCode === 202) {
+      return {
+        pending: true,
+        statusCode: 202,
+        responseId: headerValue(res.headers["response-id"]),
+        requestId: headerValue(res.headers["request-id"]) ?? headerValue(res.headers["x-request-id"]),
+        message: "ESET API accepted the request but the result is still pending. Retry the same tool call later.",
+      };
+    }
+
+    return res.body ? JSON.parse(res.body) : emptyFallback;
   }
 
   private rawRequest(
     method: string, baseUrl: string, path: string,
     body?: string, contentType = "application/json", useAuth = false,
-  ): Promise<string> {
-    return new Promise((resolve, reject) => {
+  ): Promise<RawResponse> {
+    const deadline = Date.now() + requestTimeoutMs();
+
+    const send = (responseId?: string): Promise<RawResponse> => new Promise((resolve, reject) => {
       const url = new URL(path, baseUrl);
       const isHttps = url.protocol === "https:";
       const transport = isHttps ? https : http;
@@ -785,6 +819,9 @@ export class EsetClient {
       };
       if (useAuth && this.accessToken) {
         headers["Authorization"] = `Bearer ${this.accessToken}`;
+      }
+      if (responseId) {
+        headers["response-id"] = responseId;
       }
       if (body) {
         headers["Content-Length"] = Buffer.byteLength(body).toString();
@@ -809,6 +846,16 @@ export class EsetClient {
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
           const data = Buffer.concat(chunks).toString("utf-8");
+          if (res.statusCode === 202) {
+            const nextResponseId = headerValue(res.headers["response-id"]) ?? responseId;
+            if (nextResponseId && Date.now() + PENDING_RETRY_DELAY_MS < deadline) {
+              setTimeout(() => {
+                send(nextResponseId).then(resolve, reject);
+              }, PENDING_RETRY_DELAY_MS);
+              return;
+            }
+          }
+
           if (res.statusCode && res.statusCode >= 400) {
             const detail = [
               `ESET API error ${res.statusCode}`,
@@ -816,19 +863,25 @@ export class EsetClient {
               `method=${method}`,
               `path=${path}`,
               body ? `reqBodyLen=${body.length}` : "",
-              body && method === "POST" ? `reqBody=${body.substring(0, 300)}` : "",
+              responseId ? `response-id=${responseId}` : "",
+              res.headers["request-id"] ? `request-id=${res.headers["request-id"]}` : "",
               res.headers["x-request-id"] ? `x-request-id=${res.headers["x-request-id"]}` : "",
             ].filter(Boolean).join(" | ");
             reject(new Error(detail));
           } else {
-            resolve(data);
+            resolve({ statusCode: res.statusCode ?? 0, headers: res.headers, body: data });
           }
         });
       });
 
       req.on("error", reject);
+      req.setTimeout(requestTimeoutMs(), () => {
+        req.destroy(new Error(`ESET API request timed out after ${requestTimeoutMs()}ms | method=${method} | path=${path}`));
+      });
       if (body) req.write(body);
       req.end();
     });
+
+    return send();
   }
 }

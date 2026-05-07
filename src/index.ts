@@ -27,6 +27,8 @@ import { EsetClient, type EsetConfig, type EsetRegion } from "./eset-client.js";
 import { registerSharedTools } from "./tools-shared.js";
 import { registerCloudTools } from "./tools-cloud.js";
 
+const VERSION = "1.3.3";
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -62,10 +64,10 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "eset-protect-mcp",
-    version: "1.3.2",
+    version: VERSION,
   });
 
-  process.stderr.write(`[eset-protect-mcp] v1.3.2 started, mode=${config.mode}\n`);
+  process.stderr.write(`[eset-protect-mcp] v${VERSION} started, mode=${config.mode}\n`);
 
   // Register tools available in both modes
   registerSharedTools(server, client);
