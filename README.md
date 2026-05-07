@@ -209,6 +209,28 @@ npm run build
 npm start
 ```
 
+## Release
+
+CI runs on pushes and pull requests to `master`.
+
+To publish from GitHub Actions, configure npm Trusted Publishing for this package:
+
+| Field | Value |
+|---|---|
+| Publisher | GitHub Actions |
+| Organization or user | `Fenrindale` |
+| Repository | `eset-protect-mcp` |
+| Workflow filename | `publish.yml` |
+
+If Trusted Publishing is not enabled, add a GitHub repository secret named `NPM_TOKEN` with npm publish permission.
+
+Then release by bumping the package version and pushing the matching tag:
+
+```bash
+npm version patch
+git push origin master --follow-tags
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
