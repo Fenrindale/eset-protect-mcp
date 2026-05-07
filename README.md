@@ -222,8 +222,6 @@ To publish from GitHub Actions, configure npm Trusted Publishing for this packag
 | Repository | `eset-protect-mcp` |
 | Workflow filename | `publish.yml` |
 
-If Trusted Publishing is not enabled, add a GitHub repository secret named `NPM_TOKEN` with npm publish permission.
-
 Then release by bumping the package version and pushing the matching tag:
 
 ```bash
