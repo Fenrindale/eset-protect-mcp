@@ -381,9 +381,10 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       if (parsedScopes) exclusion.scopes = parsedScopes;
 
       const payload = { exclusion };
-      // Debug: log exact payload to stderr so users can see what's sent
-      const payloadJson = JSON.stringify(payload);
-      process.stderr.write(`[eset-mcp] create_edr_rule_exclusion payload (${payloadJson.length} bytes): ${payloadJson.substring(0, 500)}\n`);
+      process.stderr.write(
+        `[eset-mcp] create_edr_rule_exclusion payload metadata: ruleUuids=${ruleUuids.length}, ` +
+        `xmlDefinitionLength=${xmlDefinition.length}, hasNote=${Boolean(note)}, hasScopes=${Boolean(parsedScopes)}\n`,
+      );
 
       try {
         const result = await client.createEdrRuleExclusion(payload);
@@ -400,7 +401,7 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
               exclusionKeys: Object.keys(exclusion),
               ruleUuidsCount: ruleUuids.length,
               xmlDefinitionLength: xmlDefinition.length,
-              xmlDefinitionPreview: xmlDefinition.substring(0, 100),
+              scopesCount: Array.isArray(parsedScopes) ? parsedScopes.length : 0,
             },
           }, null, 2) }],
           isError: true,
@@ -444,9 +445,9 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_incidents",
-    "List security incidents. Supports CEL filter syntax, e.g. status==\"INCIDENT_STATUS_OPEN\", severity==\"INCIDENT_SEVERITY_LEVEL_HIGH\", displayName.contains(\"abc\"). Status values: INCIDENT_STATUS_OPEN, INCIDENT_STATUS_IN_PROGRESS, INCIDENT_STATUS_CLOSED, INCIDENT_STATUS_WAITING_FOR_INPUT. Severity values: INCIDENT_SEVERITY_LEVEL_LOW, INCIDENT_SEVERITY_LEVEL_MEDIUM, INCIDENT_SEVERITY_LEVEL_HIGH.",
+    "List security incidents. Supports CEL filter syntax, e.g. status==INCIDENT_STATUS_OPEN, severity==INCIDENT_SEVERITY_LEVEL_HIGH, displayName.contains(\"abc\"). Enum values must not be quoted. Status values: INCIDENT_STATUS_OPEN, INCIDENT_STATUS_IN_PROGRESS, INCIDENT_STATUS_CLOSED, INCIDENT_STATUS_WAITING_FOR_INPUT. Severity values: INCIDENT_SEVERITY_LEVEL_LOW, INCIDENT_SEVERITY_LEVEL_MEDIUM, INCIDENT_SEVERITY_LEVEL_HIGH.",
     {
-      filter: z.string().optional().describe('CEL filter expression, e.g. status=="INCIDENT_STATUS_OPEN"'),
+      filter: z.string().optional().describe("CEL filter expression, e.g. status==INCIDENT_STATUS_OPEN. Do not quote enum values."),
       orderBy: z.string().optional().describe('Comma-separated fields with optional " desc" suffix, e.g. "severity desc"'),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
