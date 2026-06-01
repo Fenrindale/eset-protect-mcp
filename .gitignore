@@ -4,5 +4,6 @@ dist/
 *.d.ts.map
 .env
 .vscode/
+.eset-mcp/
 .DS_Store
 Thumbs.db
