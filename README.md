@@ -83,6 +83,48 @@ npm run build
 | `ESET_VERIFY_SSL` | On-Prem only | `false` to allow self-signed certs (default: `true`) |
 | `ESET_REGION` | Cloud only | `eu`, `de`, `us`, `jpn`, or `ca` |
 | `ESET_REQUEST_TIMEOUT_MS` | No | HTTP request timeout in milliseconds (default: `120000`) |
+| `ESET_EXECUTION_MODE` | No | `live` (default), `read-only`, `dry-run`, or `scoped` |
+| `ESET_ALLOWED_TOOLS` | No | Comma-separated tool allowlist |
+| `ESET_DENIED_TOOLS` | No | Comma-separated tool blocklist |
+| `ESET_REQUIRE_APPROVAL` | No | `none`, `all`, risk levels (`low_write`, `high_write`, `destructive`), or tool names |
+| `ESET_APPROVALS_DIR` | No | Approval record directory (default: `.eset-mcp/approvals`) |
+| `ESET_APPROVAL_TOKEN` | No | Token required by the local `approve_action` tool |
+| `ESET_APPROVAL_TTL_SECONDS` | No | Approval validity window (default: `900`) |
+| `ESET_AUDIT_LOG` | No | JSONL audit log path for tool decisions and executions |
+| `ESET_ALLOWED_DEVICE_UUIDS` | No | Comma-separated device UUID allowlist for scoped mode |
+| `ESET_ALLOWED_GROUP_UUIDS` | No | Comma-separated group UUID allowlist for scoped mode |
+| `ESET_ALLOWED_RULE_UUIDS` | No | Comma-separated EDR rule UUID allowlist for scoped mode |
+| `ESET_ALLOW_GLOBAL_SCOPE` | No | `true` to allow global EDR exclusions in scoped mode |
+
+### Approval and Sandbox Controls
+
+The server includes a local policy gate before any ESET API call. The default `live` mode preserves existing behavior.
+
+| Mode | Behavior |
+|---|---|
+| `live` | Execute tools normally, unless allow/deny/approval variables are configured |
+| `read-only` | Allow only `list_*`, `get_*`, `batch_get_*`, and `search_*` tools |
+| `dry-run` | Return a sanitized action summary for write tools without calling ESET |
+| `scoped` | Enforce configured UUID allowlists and require approval for `high_write` and `destructive` tools by default |
+
+Write tools are classified as `low_write`, `high_write`, or `destructive`. When approval is required, the first tool call returns `approvalRequired`, writes a pending approval record, and does not call ESET. A human can then approve it with the local `approve_action` tool or by writing a matching JSON approval file under `ESET_APPROVALS_DIR`. Approved actions are one-shot and are consumed after execution.
+
+Two local security tools are always registered:
+
+| Tool | Purpose |
+|---|---|
+| `list_pending_approvals` | Show pending approval records from the local approval store |
+| `approve_action` | Approve or deny one pending action when `ESET_APPROVAL_TOKEN` is configured |
+
+Example guarded configuration:
+
+```bash
+ESET_EXECUTION_MODE=scoped
+ESET_REQUIRE_APPROVAL=high_write,destructive
+ESET_ALLOWED_RULE_UUIDS=rule-uuid-1,rule-uuid-2
+ESET_ALLOWED_GROUP_UUIDS=group-uuid-1
+ESET_AUDIT_LOG=/var/log/eset-mcp-audit.jsonl
+```
 
 ## Usage with MCP Clients
 

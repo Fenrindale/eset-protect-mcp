@@ -26,8 +26,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { EsetClient, type EsetConfig, type EsetRegion } from "./eset-client.js";
 import { registerSharedTools } from "./tools-shared.js";
 import { registerCloudTools } from "./tools-cloud.js";
+import { SecurityManager } from "./security.js";
 
-const VERSION = "1.3.3";
+const VERSION = "1.4.0";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -66,8 +67,10 @@ async function main(): Promise<void> {
     name: "eset-protect-mcp",
     version: VERSION,
   });
+  const security = new SecurityManager();
+  security.apply(server);
 
-  process.stderr.write(`[eset-protect-mcp] v${VERSION} started, mode=${config.mode}\n`);
+  process.stderr.write(`[eset-protect-mcp] v${VERSION} started, mode=${config.mode}, ${security.startupSummary()}\n`);
 
   // Register tools available in both modes
   registerSharedTools(server, client);
@@ -76,6 +79,9 @@ async function main(): Promise<void> {
   if (config.mode === "cloud") {
     registerCloudTools(server, client);
   }
+
+  // Register local security control tools after ESET tools.
+  security.registerTools(server);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
