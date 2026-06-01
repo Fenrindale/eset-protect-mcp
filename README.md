@@ -263,6 +263,7 @@ To publish from GitHub Actions, configure npm Trusted Publishing for this packag
 | Organization or user | `Fenrindale` |
 | Repository | `eset-protect-mcp` |
 | Workflow filename | `publish.yml` |
+| Allowed actions | `npm publish` |
 
 Then release by bumping the package version and pushing the matching tag:
 
