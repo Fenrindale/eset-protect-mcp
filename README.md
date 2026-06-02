@@ -23,7 +23,7 @@ npx -y eset-protect-mcp
 | **Policies** | `list_policies`, `get_policy`, `create_policy`, `delete_policy` |
 | **Policy Assignments** | `list_policy_assignments`, `get_policy_assignment`, `assign_policy`, `unassign_policy`, `update_policy_assignment_ranking` |
 
-### Cloud-Only Tools (ESET Connect) — 77 additional tools
+### Cloud-Only Tools (ESET Connect) — 78 additional tools
 
 | Category | Tools |
 |---|---|
@@ -37,7 +37,7 @@ npx -y eset-protect-mcp
 | **EDR Rule Exclusions** | `list_edr_rule_exclusions`, `create_edr_rule_exclusion`, `get_edr_rule_exclusion`, `delete_edr_rule_exclusion`, `update_edr_rule_exclusion_definition` |
 | **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, `update_incident_attributes` |
 | **Incident Comments** | `list_incident_comments`, `create_incident_comment`, `get_incident_comment`, `delete_incident_comment`, `update_incident_comment_text` |
-| **Executables** | `list_executables`, `get_executable`, `block_executable`, `unblock_executable` |
+| **Executables** | `list_executables`, `search_executables`, `get_executable`, `block_executable`, `unblock_executable` |
 | **Quarantine** | `list_quarantined_objects`, `get_quarantined_object`, `get_quarantine_count`, `batch_delete_quarantined_objects`, `batch_download_quarantined_objects`, `batch_restore_quarantined_objects`, `download_quarantined_object`, `purge_quarantined_objects`, `restore_quarantined_object` |
 | **Installers** | `list_installers`, `get_installer`, `create_installer`, `delete_installer`, `generate_gpo_sccm_file` |
 | **Mobile Devices** | `batch_activate_mobile_product`, `batch_get_enrollment_links` |
@@ -46,6 +46,10 @@ npx -y eset-protect-mcp
 | **Web Access** | `list_web_address_rules`, `update_web_address_rule_domains` |
 
 Incident filters use unquoted enum constants. For example, use `status==INCIDENT_STATUS_OPEN`, not `status=="INCIDENT_STATUS_OPEN"`.
+
+Use `search_executables` with `hashSha1` or `displayName` to resolve the `executableUuid` required by `block_executable`. ESET exposes executable listing with pagination only, so the MCP server scans pages client-side.
+
+For automation troubleshooting, `create_device_task` adds a specific hint when Run Command task creation returns an empty-body HTTP 500. Use `list_device_task_runs` with `includeFailureSummary=true` to append `_mcpFailureSummary` from status, error, reason, and exit-code fields.
 
 ## Prerequisites
 
@@ -83,6 +87,7 @@ npm run build
 | `ESET_VERIFY_SSL` | On-Prem only | `false` to allow self-signed certs (default: `true`) |
 | `ESET_REGION` | Cloud only | `eu`, `de`, `us`, `jpn`, or `ca` |
 | `ESET_REQUEST_TIMEOUT_MS` | No | HTTP request timeout in milliseconds (default: `120000`) |
+| `ESET_EXECUTABLE_SEARCH_MAX_PAGES` | No | Max pages scanned by `search_executables` (default: `20`) |
 | `ESET_EXECUTION_MODE` | No | `live` (default), `read-only`, `dry-run`, or `scoped` |
 | `ESET_ALLOWED_TOOLS` | No | Comma-separated tool allowlist |
 | `ESET_DENIED_TOOLS` | No | Comma-separated tool blocklist |

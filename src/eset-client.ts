@@ -49,6 +49,48 @@ function requestTimeoutMs(): number {
   return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
+function normalizedTaskAction(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function containsActionName(value: unknown, candidates: string[]): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => containsActionName(item, candidates));
+
+  const obj = value as Record<string, unknown>;
+  for (const [key, item] of Object.entries(obj)) {
+    if ((key === "name" || key === "action" || key === "type") && typeof item === "string") {
+      const normalized = normalizedTaskAction(item);
+      if (candidates.some((candidate) => normalized.includes(normalizedTaskAction(candidate)))) return true;
+    }
+    if (containsActionName(item, candidates)) return true;
+  }
+  return false;
+}
+
+function isRunCommandTask(value: unknown): boolean {
+  return containsActionName(value, ["RunCommand", "Run Command", "run_command"]);
+}
+
+function matchesExecutable(executable: unknown, filters: { displayName?: string; hashSha1?: string }): boolean {
+  if (!executable || typeof executable !== "object") return false;
+  const obj = executable as Record<string, unknown>;
+
+  if (filters.hashSha1) {
+    const expected = filters.hashSha1.toLowerCase();
+    const actual = typeof obj.hashSha1 === "string" ? obj.hashSha1.toLowerCase() : "";
+    if (actual !== expected) return false;
+  }
+
+  if (filters.displayName) {
+    const expected = filters.displayName.toLowerCase();
+    const actual = typeof obj.displayName === "string" ? obj.displayName.toLowerCase() : "";
+    if (!actual.includes(expected)) return false;
+  }
+
+  return Boolean(filters.hashSha1 || filters.displayName);
+}
+
 // ─── Cloud domain map ───────────────────────────────────────────────
 
 const CLOUD_DOMAINS: Record<string, string> = {
@@ -266,7 +308,18 @@ export class EsetClient {
 
   async createDeviceTask(taskData: Record<string, unknown>): Promise<unknown> {
     this.requireCloud("createDeviceTask");
-    return this.apiPost("automation", "/v1/device_tasks", taskData);
+    try {
+      return await this.apiPost("automation", "/v1/device_tasks", taskData);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isRunCommandTask(taskData) && message.includes("ESET API error 500") && message.includes("body=(empty)")) {
+        throw new Error(
+          `${message} | hint=Run Command task creation returned HTTP 500 with an empty body. ` +
+          "Check whether the API user and tenant satisfy ESET Run Command security requirements, including 2FA/interactive authorization requirements, and verify the task action wrapper payload.",
+        );
+      }
+      throw error;
+    }
   }
 
   async getDeviceTask(taskUuid: string): Promise<unknown> {
@@ -552,6 +605,45 @@ export class EsetClient {
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
     return this.apiGet("application-management", `/v1/executables${qs}`);
+  }
+
+  async searchExecutables(filters: {
+    displayName?: string;
+    hashSha1?: string;
+    limit?: number;
+    pageSize?: number;
+  }): Promise<unknown> {
+    this.requireCloud("searchExecutables");
+    const limit = Math.max(1, Math.min(filters.limit ?? 20, 100));
+    const pageSize = Math.max(1, Math.min(filters.pageSize ?? 1000, 1000));
+    const configuredMaxPages = Number(process.env.ESET_EXECUTABLE_SEARCH_MAX_PAGES);
+    const maxPages = Number.isFinite(configuredMaxPages) && configuredMaxPages > 0 ? configuredMaxPages : 20;
+    const matches: unknown[] = [];
+    let pageToken: string | undefined;
+    let pagesScanned = 0;
+
+    do {
+      pagesScanned += 1;
+      const page = await this.listExecutables(pageSize, pageToken) as Record<string, unknown>;
+      const executables = Array.isArray(page.executables) ? page.executables : [];
+      for (const executable of executables) {
+        if (matchesExecutable(executable, filters)) {
+          matches.push(executable);
+          if (matches.length >= limit) {
+            return { executables: matches, pagesScanned, nextPageToken: page.nextPageToken };
+          }
+        }
+      }
+      pageToken = typeof page.nextPageToken === "string" && page.nextPageToken ? page.nextPageToken : undefined;
+    } while (pageToken && pagesScanned < maxPages);
+
+    return {
+      executables: matches,
+      pagesScanned,
+      nextPageToken: pageToken,
+      truncated: Boolean(pageToken),
+      hint: pageToken ? "Increase ESET_EXECUTABLE_SEARCH_MAX_PAGES to scan more pages." : undefined,
+    };
   }
 
   async getExecutable(executableUuid: string): Promise<unknown> {
