@@ -11,6 +11,94 @@ function json(result: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
 }
 
+function jsonError(result: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: true };
+}
+
+function normalizedAction(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function containsActionName(value: unknown, candidates: string[]): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => containsActionName(item, candidates));
+
+  const obj = value as Record<string, unknown>;
+  for (const [key, item] of Object.entries(obj)) {
+    if ((key === "name" || key === "action" || key === "type") && typeof item === "string") {
+      const normalized = normalizedAction(item);
+      if (candidates.some((candidate) => normalized.includes(normalizedAction(candidate)))) return true;
+    }
+    if (containsActionName(item, candidates)) return true;
+  }
+  return false;
+}
+
+function numericField(value: unknown, fieldName: string): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = numericField(item, fieldName);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const obj = value as Record<string, unknown>;
+  const direct = obj[fieldName];
+  if (typeof direct === "number") return direct;
+  for (const item of Object.values(obj)) {
+    const found = numericField(item, fieldName);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function withDeviceTaskWarnings(result: unknown, taskData: unknown): unknown {
+  const warnings: string[] = [];
+  if (containsActionName(taskData, ["KillProcessByPid", "Kill Process By Pid"])) {
+    const pid = numericField(taskData, "pid");
+    if (!pid) {
+      warnings.push(
+        "KillProcessByPid was submitted without a non-zero pid. ESET may normalize hash-only requests to pid=0; check list_device_task_runs with includeFailureSummary=true for execution failure details.",
+      );
+    }
+  }
+  if (warnings.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), _mcpWarnings: warnings };
+}
+
+function collectFailureFields(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
+  if (output.length >= 50 || !value || typeof value !== "object") return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectFailureFields(item, output, `${path}[${index}]`));
+    return;
+  }
+
+  const obj = value as Record<string, unknown>;
+  for (const [key, item] of Object.entries(obj)) {
+    const keyLower = key.toLowerCase();
+    const currentPath = `${path}.${key}`;
+    const keyLooksRelevant = /error|reason|message|status|result|failure|failed|exitcode/.test(keyLower);
+
+    if (typeof item === "string") {
+      const valueLooksRelevant = /fail|error|denied|timeout|not[_ ]?supported|pid|2fa/i.test(item);
+      if (keyLooksRelevant || valueLooksRelevant) output.push({ path: currentPath, value: item });
+    } else if (typeof item === "number") {
+      if ((keyLower === "exitcode" || keyLower.endsWith("exitcode")) && item !== 0) output.push({ path: currentPath, value: item });
+    } else {
+      collectFailureFields(item, output, currentPath);
+    }
+  }
+}
+
+function withFailureSummary(result: unknown): unknown {
+  const failureSummary: Array<Record<string, unknown>> = [];
+  collectFailureFields(result, failureSummary);
+  if (failureSummary.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), _mcpFailureSummary: failureSummary };
+}
+
 export function registerCloudTools(server: McpServer, client: EsetClient): void {
   // ── Device Management (Cloud extras) ──────────────────────────────
 
@@ -73,7 +161,20 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "create_device_task",
     "Create a new device task (e.g. scan, isolate, run command, shutdown)",
     { taskData: z.string().describe("JSON string of task config (action.name, targets, triggers, etc.)") },
-    async ({ taskData }) => json(await client.createDeviceTask(JSON.parse(taskData))),
+    async ({ taskData }) => {
+      const parsedTaskData = JSON.parse(taskData);
+      try {
+        return json(withDeviceTaskWarnings(await client.createDeviceTask(parsedTaskData), parsedTaskData));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return jsonError({
+          error: message,
+          hint: message.includes("Run Command task creation returned HTTP 500")
+            ? "Run Command can be rejected upstream by ESET security requirements such as 2FA/interactive authorization. Verify the API user's requirements and the task wrapper payload."
+            : undefined,
+        });
+      }
+    },
   );
 
   server.tool(
@@ -97,11 +198,14 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       taskUuid: z.string().describe("UUID of the task"),
       deviceUuid: z.string().optional().describe("Filter: only runs on this specific device UUID"),
       listOnlyLastRuns: z.boolean().optional().describe("If true, only return the latest run per device"),
+      includeFailureSummary: z.boolean().optional().describe("Append _mcpFailureSummary with relevant status/error/reason fields"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken }) =>
-      json(await client.listDeviceTaskRuns(taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken)),
+    async ({ taskUuid, deviceUuid, listOnlyLastRuns, includeFailureSummary, pageSize, pageToken }) => {
+      const result = await client.listDeviceTaskRuns(taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken);
+      return json(includeFailureSummary ? withFailureSummary(result) : result);
+    },
   );
 
   server.tool(
@@ -557,6 +661,23 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       pageToken: z.string().optional().describe("Token for next page"),
     },
     async ({ pageSize, pageToken }) => json(await client.listExecutables(pageSize, pageToken)),
+  );
+
+  server.tool(
+    "search_executables",
+    "Search executables by exact SHA1 hash or case-insensitive display name substring. This scans list_executables pages client-side because ESET only exposes pageSize/pageToken on the list endpoint.",
+    {
+      hashSha1: z.string().optional().describe("Exact SHA1 hash to match"),
+      displayName: z.string().optional().describe("Case-insensitive display name substring to match"),
+      limit: z.number().optional().describe("Maximum matches to return (default 20, max 100)"),
+      pageSize: z.number().optional().describe("Page size while scanning (default 1000, max 1000)"),
+    },
+    async ({ hashSha1, displayName, limit, pageSize }) => {
+      if (!hashSha1 && !displayName) {
+        return jsonError({ error: "Provide hashSha1 or displayName." });
+      }
+      return json(await client.searchExecutables({ hashSha1, displayName, limit, pageSize }));
+    },
   );
 
   server.tool(
