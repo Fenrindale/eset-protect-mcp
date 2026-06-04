@@ -91,6 +91,26 @@ function matchesExecutable(executable: unknown, filters: { displayName?: string;
   return Boolean(filters.hashSha1 || filters.displayName);
 }
 
+function normalizeIncidentCommentData(incidentUuid: string, commentData: Record<string, unknown>): Record<string, unknown> {
+  if (commentData.comment && typeof commentData.comment === "object" && !Array.isArray(commentData.comment)) {
+    const comment = commentData.comment as Record<string, unknown>;
+    return {
+      ...commentData,
+      comment: {
+        ...comment,
+        incidentUuid,
+      },
+    };
+  }
+
+  return {
+    comment: {
+      ...commentData,
+      incidentUuid,
+    },
+  };
+}
+
 // ─── Cloud domain map ───────────────────────────────────────────────
 
 const CLOUD_DOMAINS: Record<string, string> = {
@@ -578,7 +598,11 @@ export class EsetClient {
 
   async createIncidentComment(incidentUuid: string, commentData: Record<string, unknown>): Promise<unknown> {
     this.requireCloud("createIncidentComment");
-    return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments`, commentData);
+    return this.apiPost(
+      "incident-management",
+      `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments`,
+      normalizeIncidentCommentData(incidentUuid, commentData),
+    );
   }
 
   async getIncidentComment(incidentUuid: string, commentUuid: string): Promise<unknown> {

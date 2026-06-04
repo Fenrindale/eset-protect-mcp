@@ -51,6 +51,8 @@ Use `search_executables` with `hashSha1` or `displayName` to resolve the `execut
 
 For automation troubleshooting, `create_device_task` adds a specific hint when Run Command task creation returns an empty-body HTTP 500. Use `list_device_task_runs` with `includeFailureSummary=true` to append `_mcpFailureSummary` from status, error, reason, and exit-code fields.
 
+For `create_incident_comment`, pass `{"text":"..."}`. The MCP server wraps it into ESET's required `{"comment":{"incidentUuid":"...","text":"..."}}` request body.
+
 ## Prerequisites
 
 - **Node.js** >= 18.0.0
