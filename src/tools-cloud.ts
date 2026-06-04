@@ -614,7 +614,7 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "Add a comment to an incident",
     {
       incidentUuid: z.string().describe("UUID of the incident"),
-      commentData: z.string().describe("JSON string of comment data (e.g. {text})"),
+      commentData: z.string().describe("JSON string of comment data. Use {\"text\":\"...\"}; the MCP server wraps it as {comment:{incidentUuid,text}} for ESET."),
     },
     async ({ incidentUuid, commentData }) => json(await client.createIncidentComment(incidentUuid, JSON.parse(commentData))),
   );
