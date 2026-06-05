@@ -8,6 +8,7 @@
 import https from "node:https";
 import http from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
+import { decompress as decompressLzma } from "lzma";
 
 // ─── Configuration types ────────────────────────────────────────────
 
@@ -126,15 +127,20 @@ function looksLikeBase64(value: string): boolean {
   return trimmed.length >= 16 && /^[A-Za-z0-9+/=_-]+$/.test(trimmed);
 }
 
-function parseJsonPrefix(value: string): { parsed: unknown; trailingBytes: number; trailingPreview?: string } {
+function printablePreview(value: Buffer, limit = 200): string | undefined {
+  const preview = value.toString("utf8").replace(/\u0000/g, "\\0").trim();
+  return preview ? preview.slice(0, limit) : undefined;
+}
+
+function parseJsonPrefix(value: Buffer): { parsed: unknown; trailingBytes: number; trailingPreview?: string; trailingBuffer?: Buffer } {
+  const text = value.toString("utf8").trim();
   try {
-    return { parsed: JSON.parse(value) as unknown, trailingBytes: 0 };
+    return { parsed: JSON.parse(text) as unknown, trailingBytes: 0 };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
   }
 
-  const decoder = new TextDecoder();
-  const bytes = Buffer.from(value, "utf8");
+  const bytes = value;
   let candidateEnd = bytes.length;
 
   while (candidateEnd > 0) {
@@ -143,31 +149,104 @@ function parseJsonPrefix(value: string): { parsed: unknown; trailingBytes: numbe
     const end = Math.max(closeBrace, closeBracket);
     if (end < 0) break;
 
-    const candidate = decoder.decode(bytes.subarray(0, end + 1)).trim();
+    const candidate = bytes.subarray(0, end + 1).toString("utf8").trim();
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      const trailing = decoder.decode(bytes.subarray(end + 1)).trim();
+      const trailingBuffer = Buffer.from(bytes.subarray(end + 1));
       return {
         parsed,
         trailingBytes: bytes.length - end - 1,
-        trailingPreview: trailing ? trailing.slice(0, 200) : undefined,
+        trailingPreview: printablePreview(trailingBuffer),
+        trailingBuffer,
       };
     } catch {
       candidateEnd = end;
     }
   }
 
-  return { parsed: JSON.parse(value) as unknown, trailingBytes: 0 };
+  return { parsed: JSON.parse(text) as unknown, trailingBytes: 0 };
 }
 
-function decodePolicyDataBlob(value: string): { decoded: unknown; decodingLayers: number; trailingBytes?: number; trailingPreview?: string } {
+function parseArArchive(value: Buffer): Array<{ name: string; size: number; data: Buffer }> {
+  const magic = Buffer.from("!<arch>\n", "ascii");
+  const offset = value.indexOf(magic);
+  if (offset < 0) return [];
+
+  const members: Array<{ name: string; size: number; data: Buffer }> = [];
+  let cursor = offset + magic.length;
+  while (cursor + 60 <= value.length) {
+    const header = value.subarray(cursor, cursor + 60);
+    if (header.subarray(58, 60).toString("ascii") !== "`\n") break;
+    const rawName = header.subarray(0, 16).toString("utf8").trim();
+    const sizeText = header.subarray(48, 58).toString("ascii").trim();
+    const size = Number(sizeText);
+    if (!Number.isFinite(size) || size < 0) break;
+    const dataStart = cursor + 60;
+    const dataEnd = dataStart + size;
+    if (dataEnd > value.length) break;
+    members.push({
+      name: rawName.replace(/\/$/, ""),
+      size,
+      data: Buffer.from(value.subarray(dataStart, dataEnd)),
+    });
+    cursor = dataEnd + (size % 2);
+  }
+  return members;
+}
+
+function decodeMaybeJsonPayload(value: Buffer): Record<string, unknown> {
+  const parsed = parseJsonPrefix(value);
+  return {
+    parsed: parsed.parsed,
+    trailingBytes: parsed.trailingBytes || undefined,
+    trailingPreview: parsed.trailingPreview,
+  };
+}
+
+function decodeArchiveMembers(value: Buffer): Array<Record<string, unknown>> | undefined {
+  const members = parseArArchive(value);
+  if (members.length === 0) return undefined;
+
+  return members.map((member) => {
+    const result: Record<string, unknown> = {
+      name: member.name,
+      size: member.size,
+    };
+    if (!member.name.toLowerCase().endsWith(".lzma")) return result;
+
+    try {
+      const decompressed = decompressLzma(member.data);
+      const decompressedBuffer = typeof decompressed === "string"
+        ? Buffer.from(decompressed, "utf8")
+        : Buffer.from(decompressed);
+      result.decompressedBytes = decompressedBuffer.length;
+      result.decompressedPreview = printablePreview(decompressedBuffer, 500);
+      try {
+        result.decoded = decodeMaybeJsonPayload(decompressedBuffer);
+      } catch (error) {
+        result.decodeError = `Failed to parse decompressed member as JSON: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    } catch (error) {
+      result.decompressError = `Failed to decompress LZMA member: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    return result;
+  });
+}
+
+function decodePolicyDataBlob(value: string): {
+  decoded: unknown;
+  decodingLayers: number;
+  trailingBytes?: number;
+  trailingPreview?: string;
+  archiveMembers?: Array<Record<string, unknown>>;
+} {
   let current = value;
   let lastJsonError: unknown;
 
   for (let layer = 1; layer <= 5; layer += 1) {
-    const decodedText = Buffer.from(normalizeBase64(current), "base64").toString("utf8").trim();
+    const decodedBuffer = Buffer.from(normalizeBase64(current), "base64");
     try {
-      const parsedJson = parseJsonPrefix(decodedText);
+      const parsedJson = parseJsonPrefix(decodedBuffer);
       const parsed = parsedJson.parsed;
       if (typeof parsed === "string" && looksLikeBase64(parsed)) {
         current = parsed;
@@ -178,9 +257,11 @@ function decodePolicyDataBlob(value: string): { decoded: unknown; decodingLayers
         decodingLayers: layer,
         trailingBytes: parsedJson.trailingBytes || undefined,
         trailingPreview: parsedJson.trailingPreview,
+        archiveMembers: parsedJson.trailingBuffer ? decodeArchiveMembers(parsedJson.trailingBuffer) : undefined,
       };
     } catch (error) {
       lastJsonError = error;
+      const decodedText = decodedBuffer.toString("utf8").trim();
       if (!looksLikeBase64(decodedText)) throw error;
       current = decodedText;
     }
@@ -208,6 +289,7 @@ function collectDecodedPolicyData(value: unknown, output: Array<Record<string, u
         decodingLayers: decodedPolicyData.decodingLayers,
         trailingBytes: decodedPolicyData.trailingBytes,
         trailingPreview: decodedPolicyData.trailingPreview,
+        archiveMembers: decodedPolicyData.archiveMembers,
         decoded: decodedPolicyData.decoded,
       });
     } catch (error) {
