@@ -8,7 +8,7 @@
 import https from "node:https";
 import http from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
-import { decompress as decompressLzma } from "lzma";
+import { compress as compressLzma, decompress as decompressLzma } from "lzma";
 
 // ─── Configuration types ────────────────────────────────────────────
 
@@ -44,6 +44,19 @@ interface DecodePolicyOptions {
   decodedPath?: string;
   decodedSearch?: string;
   decodedMaxMatches?: number;
+}
+
+interface PolicyArchiveMember {
+  name: string;
+  size: number;
+  data: Buffer;
+}
+
+interface DecodedPolicyContainer {
+  decoded: unknown;
+  decodingLayers: number;
+  prefixBuffer: Buffer;
+  archiveMembers: PolicyArchiveMember[];
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -176,12 +189,12 @@ function parseJsonPrefix(value: Buffer): { parsed: unknown; trailingBytes: numbe
   return { parsed: JSON.parse(text) as unknown, trailingBytes: 0 };
 }
 
-function parseArArchive(value: Buffer): Array<{ name: string; size: number; data: Buffer }> {
+function parseArArchive(value: Buffer): PolicyArchiveMember[] {
   const magic = Buffer.from("!<arch>\n", "ascii");
   const offset = value.indexOf(magic);
   if (offset < 0) return [];
 
-  const members: Array<{ name: string; size: number; data: Buffer }> = [];
+  const members: PolicyArchiveMember[] = [];
   let cursor = offset + magic.length;
   while (cursor + 60 <= value.length) {
     const header = value.subarray(cursor, cursor + 60);
@@ -201,6 +214,67 @@ function parseArArchive(value: Buffer): Array<{ name: string; size: number; data
     cursor = dataEnd + (size % 2);
   }
   return members;
+}
+
+function buildArMember(name: string, data: Buffer): Buffer {
+  const header = Buffer.alloc(60, " ");
+  header.write(`${name}/`.slice(0, 16), 0, "ascii");
+  header.write(String(Math.floor(Date.now() / 1000)).slice(0, 12), 16, "ascii");
+  header.write("0", 28, "ascii");
+  header.write("0", 34, "ascii");
+  header.write("100644", 40, "ascii");
+  header.write(String(data.length), 48, "ascii");
+  header.write("`\n", 58, "ascii");
+  return Buffer.concat([header, data, data.length % 2 ? Buffer.from("\n") : Buffer.alloc(0)]);
+}
+
+function buildArArchive(members: PolicyArchiveMember[]): Buffer {
+  return Buffer.concat([
+    Buffer.from("!<arch>\n", "ascii"),
+    ...members.map((member) => buildArMember(member.name, member.data)),
+  ]);
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function setValueAtPath(root: unknown, path: string, value: unknown, mode: "set" | "insert", index?: number): void {
+  const segments = path.replace(/^\$\.?/, "").split(".").filter(Boolean);
+  if (segments.length === 0) throw new Error("Path must not be empty.");
+  let current = root as Record<string, unknown>;
+
+  for (let position = 0; position < segments.length; position += 1) {
+    const segment = segments[position];
+    const arrayMatch = segment.match(/^([^\[]+)\[(\d+)\]$/);
+    const key = arrayMatch ? arrayMatch[1] : segment;
+    const explicitIndex = arrayMatch ? Number(arrayMatch[2]) : undefined;
+    const isLast = position === segments.length - 1;
+
+    if (isLast) {
+      if (explicitIndex !== undefined) {
+        const arrayValue = current[key];
+        if (!Array.isArray(arrayValue)) throw new Error(`Path segment ${segment} is not an array.`);
+        if (mode === "insert") arrayValue.splice(explicitIndex, 0, value);
+        else arrayValue[explicitIndex] = value;
+      } else if (mode === "insert") {
+        const arrayValue = current[key];
+        if (!Array.isArray(arrayValue)) throw new Error(`Path ${path} does not resolve to an array for insert.`);
+        arrayValue.splice(index ?? arrayValue.length, 0, value);
+      } else {
+        current[key] = value;
+      }
+      return;
+    }
+
+    let next = current[key];
+    if (explicitIndex !== undefined) {
+      if (!Array.isArray(next)) throw new Error(`Path segment ${segment} is not an array.`);
+      next = next[explicitIndex];
+    }
+    if (!next || typeof next !== "object") throw new Error(`Path segment ${segment} does not exist.`);
+    current = next as Record<string, unknown>;
+  }
 }
 
 function decodeMaybeJsonPayload(value: Buffer): Record<string, unknown> {
@@ -277,6 +351,106 @@ function decodePolicyDataBlob(value: string): {
   }
 
   throw lastJsonError instanceof Error ? lastJsonError : new Error("PolicyData remained base64 after 5 decode layers");
+}
+
+function decodePolicyContainer(value: string): DecodedPolicyContainer {
+  let current = value;
+  let lastError: unknown;
+
+  for (let layer = 1; layer <= 5; layer += 1) {
+    const decodedBuffer = Buffer.from(normalizeBase64(current), "base64");
+    try {
+      const parsedJson = parseJsonPrefix(decodedBuffer);
+      if (typeof parsedJson.parsed === "string" && looksLikeBase64(parsedJson.parsed)) {
+        current = parsedJson.parsed;
+        continue;
+      }
+      const archiveMembers = parsedJson.trailingBuffer ? parseArArchive(parsedJson.trailingBuffer) : [];
+      return {
+        decoded: parsedJson.parsed,
+        decodingLayers: layer,
+        prefixBuffer: Buffer.from(decodedBuffer.subarray(0, decodedBuffer.length - (parsedJson.trailingBuffer?.length ?? 0))),
+        archiveMembers,
+      };
+    } catch (error) {
+      lastError = error;
+      const decodedText = decodedBuffer.toString("utf8").trim();
+      if (!looksLikeBase64(decodedText)) throw error;
+      current = decodedText;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("PolicyData remained base64 after 5 decode layers");
+}
+
+function encodePolicyContainer(container: DecodedPolicyContainer): string {
+  const raw = Buffer.concat([container.prefixBuffer, buildArArchive(container.archiveMembers)]);
+  let encoded = raw.toString("base64");
+  for (let layer = 1; layer < container.decodingLayers; layer += 1) {
+    encoded = Buffer.from(encoded, "utf8").toString("base64");
+  }
+  return encoded;
+}
+
+function mutateEndpointLzmaPolicyData(
+  policyData: string,
+  mutation: { path: string; value: unknown; mode: "set" | "insert"; index?: number; memberName?: string },
+): { policyData: string; memberName: string; decodingLayers: number } {
+  const container = decodePolicyContainer(policyData);
+  const memberName = mutation.memberName ?? "endpoint.lzma";
+  const member = container.archiveMembers.find((item) => item.name === memberName)
+    ?? container.archiveMembers.find((item) => item.name.toLowerCase().endsWith(".lzma"));
+  if (!member) throw new Error("No LZMA policy archive member found.");
+
+  const decompressed = decompressLzma(member.data);
+  const decompressedBuffer = typeof decompressed === "string"
+    ? Buffer.from(decompressed, "utf8")
+    : Buffer.from(decompressed);
+  const decodedPayload = parseJsonPrefix(decompressedBuffer).parsed;
+  const nextPayload = cloneJson(decodedPayload);
+  setValueAtPath(nextPayload, mutation.path, mutation.value, mutation.mode, mutation.index);
+  const recompressed = Buffer.from(compressLzma(JSON.stringify(nextPayload), 9));
+  member.data = recompressed;
+  member.size = recompressed.length;
+
+  return {
+    policyData: encodePolicyContainer(container),
+    memberName: member.name,
+    decodingLayers: container.decodingLayers,
+  };
+}
+
+function findFirstPolicyDataContainer(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstPolicyDataContainer(item);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.data === "string" && typeof obj["@type"] === "string" && obj["@type"].includes("PolicyData")) return obj;
+  for (const item of Object.values(obj)) {
+    const found = findFirstPolicyDataContainer(item);
+    if (found) return found;
+  }
+  return null;
+}
+
+function policyCreatePayloadFromExisting(policy: unknown, displayName: string, description?: string): Record<string, unknown> {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) throw new Error("Policy response is not an object.");
+  const source = "policy" in policy && typeof (policy as Record<string, unknown>).policy === "object"
+    ? (policy as Record<string, unknown>).policy as Record<string, unknown>
+    : policy as Record<string, unknown>;
+  const payload = cloneJson(source) as Record<string, unknown>;
+  delete payload.uuid;
+  delete payload.builtIn;
+  delete payload.etag;
+  payload.displayName = displayName;
+  if (description !== undefined) payload.description = description;
+  return payload;
 }
 
 function collectDecodedPolicyData(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
@@ -586,6 +760,63 @@ export class EsetClient {
 
   async createPolicy(policyData: Record<string, unknown>): Promise<unknown> {
     return this.apiPost("policy-management", "/v2/policies", policyData);
+  }
+
+  async buildEndpointPolicyCloneWithMutation(options: {
+    policyUuid: string;
+    displayName: string;
+    description?: string;
+    path: string;
+    value: unknown;
+    mode: "set" | "insert";
+    index?: number;
+    memberName?: string;
+  }): Promise<unknown> {
+    const existingPolicy = await this.getPolicy(options.policyUuid, false);
+    const payload = policyCreatePayloadFromExisting(existingPolicy, options.displayName, options.description);
+    const policyDataContainer = findFirstPolicyDataContainer(payload);
+    if (!policyDataContainer || typeof policyDataContainer.data !== "string") throw new Error("No PolicyData data field found in policy.");
+
+    const mutation = mutateEndpointLzmaPolicyData(policyDataContainer.data, {
+      path: options.path,
+      value: options.value,
+      mode: options.mode,
+      index: options.index,
+      memberName: options.memberName,
+    });
+    policyDataContainer.data = mutation.policyData;
+
+    return {
+      policyData: payload,
+      mutation: {
+        sourcePolicyUuid: options.policyUuid,
+        memberName: mutation.memberName,
+        decodingLayers: mutation.decodingLayers,
+        mode: options.mode,
+        path: options.path,
+        index: options.index,
+      },
+      warning: "ESET Connect does not expose an update-policy endpoint. Use create_policy with policyData or create_endpoint_policy_clone_with_mutation to create a cloned policy, then assign it deliberately.",
+    };
+  }
+
+  async createEndpointPolicyCloneWithMutation(options: {
+    policyUuid: string;
+    displayName: string;
+    description?: string;
+    path: string;
+    value: unknown;
+    mode: "set" | "insert";
+    index?: number;
+    memberName?: string;
+  }): Promise<unknown> {
+    const built = await this.buildEndpointPolicyCloneWithMutation(options) as Record<string, unknown>;
+    const created = await this.createPolicy(built.policyData as Record<string, unknown>);
+    return {
+      created,
+      mutation: built.mutation,
+      warning: "Created a new cloned policy. The source policy was not modified because ESET Connect has no update-policy endpoint.",
+    };
   }
 
   async deletePolicy(policyUuid: string): Promise<unknown> {
