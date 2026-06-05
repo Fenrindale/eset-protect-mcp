@@ -37,6 +37,15 @@ interface RawResponse {
   body: string;
 }
 
+interface DecodePolicyOptions {
+  enabled?: boolean;
+  omitRawPolicyData?: boolean;
+  includeFullDecodedPolicyData?: boolean;
+  decodedPath?: string;
+  decodedSearch?: string;
+  decodedMaxMatches?: number;
+}
+
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const PENDING_RETRY_DELAY_MS = 2_000;
 
@@ -306,11 +315,96 @@ function collectDecodedPolicyData(value: unknown, output: Array<Record<string, u
   }
 }
 
-function withDecodedPolicyData(result: unknown): unknown {
+function cloneWithoutRawPolicyData(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => cloneWithoutRawPolicyData(item));
+
+  const obj = value as Record<string, unknown>;
+  const clone: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(obj)) {
+    if (key === "data" && typeof item === "string" && typeof obj["@type"] === "string" && obj["@type"].includes("PolicyData")) {
+      clone[key] = `[omitted ${item.length} base64 chars]`;
+    } else {
+      clone[key] = cloneWithoutRawPolicyData(item);
+    }
+  }
+  return clone;
+}
+
+function valueAtPath(value: unknown, path: string): unknown {
+  const normalized = path.replace(/^\$\.?/, "");
+  if (!normalized) return value;
+  return normalized.split(".").reduce<unknown>((current, segment) => {
+    if (current === undefined || current === null) return undefined;
+    const arrayMatch = segment.match(/^([^\[]+)\[(\d+)\]$/);
+    if (arrayMatch) {
+      const objectValue = current as Record<string, unknown>;
+      const arrayValue = objectValue[arrayMatch[1]];
+      return Array.isArray(arrayValue) ? arrayValue[Number(arrayMatch[2])] : undefined;
+    }
+    if (Array.isArray(current) && /^\d+$/.test(segment)) return current[Number(segment)];
+    return typeof current === "object" ? (current as Record<string, unknown>)[segment] : undefined;
+  }, value);
+}
+
+function collectSearchMatches(value: unknown, search: string, output: Array<Record<string, unknown>>, path = "$", maxMatches = 50): void {
+  if (output.length >= maxMatches) return;
+  const needle = search.toLowerCase();
+
+  if (value === null || value === undefined) return;
+  if (typeof value !== "object") {
+    const text = String(value);
+    if (text.toLowerCase().includes(needle)) output.push({ path, value });
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectSearchMatches(item, search, output, `${path}[${index}]`, maxMatches));
+    return;
+  }
+
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const currentPath = `${path}.${key}`;
+    if (key.toLowerCase().includes(needle)) output.push({ path: currentPath, value: item });
+    collectSearchMatches(item, search, output, currentPath, maxMatches);
+    if (output.length >= maxMatches) return;
+  }
+}
+
+function withDecodedPolicyData(result: unknown, options: DecodePolicyOptions = {}): unknown {
   const decodedPolicyData: Array<Record<string, unknown>> = [];
   collectDecodedPolicyData(result, decodedPolicyData);
-  if (decodedPolicyData.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
-  return { ...(result as Record<string, unknown>), _mcpDecodedPolicyData: decodedPolicyData };
+  const baseResult = options.omitRawPolicyData ? cloneWithoutRawPolicyData(result) : result;
+  if (decodedPolicyData.length === 0 || !baseResult || typeof baseResult !== "object" || Array.isArray(baseResult)) return baseResult;
+
+  const metadata: Record<string, unknown> = {};
+  if (options.decodedPath) {
+    metadata.path = options.decodedPath;
+    metadata.value = decodedPolicyData.map((item) => ({
+      path: item.path,
+      product: item.product,
+      value: valueAtPath(item, options.decodedPath ?? ""),
+    }));
+  }
+  if (options.decodedSearch) {
+    const matches: Array<Record<string, unknown>> = [];
+    for (const item of decodedPolicyData) {
+      collectSearchMatches(item, options.decodedSearch, matches, `$._mcpDecodedPolicyData[${decodedPolicyData.indexOf(item)}]`, options.decodedMaxMatches ?? 50);
+      if (matches.length >= (options.decodedMaxMatches ?? 50)) break;
+    }
+    metadata.search = options.decodedSearch;
+    metadata.matches = matches;
+    metadata.truncated = matches.length >= (options.decodedMaxMatches ?? 50);
+  }
+
+  const hasSelection = Boolean(options.decodedPath || options.decodedSearch);
+  return {
+    ...(baseResult as Record<string, unknown>),
+    ...(hasSelection && !options.includeFullDecodedPolicyData
+      ? { _mcpDecodedPolicyDataSummary: { count: decodedPolicyData.length, omitted: true } }
+      : { _mcpDecodedPolicyData: decodedPolicyData }),
+    ...(Object.keys(metadata).length ? { _mcpDecodedPolicySelection: metadata } : {}),
+  };
 }
 
 async function withNetworkAccessHint(action: () => Promise<unknown>): Promise<unknown> {
@@ -484,9 +578,10 @@ export class EsetClient {
     return this.apiGet("policy-management", `/v2/policies${qs}`);
   }
 
-  async getPolicy(policyUuid: string, decodePolicyData?: boolean): Promise<unknown> {
+  async getPolicy(policyUuid: string, decodePolicyData?: boolean | DecodePolicyOptions): Promise<unknown> {
     const result = await this.apiGet("policy-management", `/v2/policies/${encodeURIComponent(policyUuid)}`);
-    return decodePolicyData ? withDecodedPolicyData(result) : result;
+    const options = typeof decodePolicyData === "object" ? decodePolicyData : { enabled: decodePolicyData };
+    return options.enabled ? withDecodedPolicyData(result, options) : result;
   }
 
   async createPolicy(policyData: Record<string, unknown>): Promise<unknown> {

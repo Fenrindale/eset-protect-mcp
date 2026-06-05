@@ -99,8 +99,21 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
     {
       policyUuid: z.string().describe("UUID of the policy"),
       decodePolicyData: z.boolean().optional().describe("Decode base64 PolicyData blobs into _mcpDecodedPolicyData"),
+      omitRawPolicyData: z.boolean().optional().describe("When decoding, omit raw base64 PolicyData strings from the original policy response"),
+      includeFullDecodedPolicyData: z.boolean().optional().describe("When using decodedPath or decodedSearch, also include full _mcpDecodedPolicyData"),
+      decodedPath: z.string().optional().describe("Optional dot path to extract from each decoded policy item, e.g. archiveMembers[0].decoded.parsed.Settings"),
+      decodedSearch: z.string().optional().describe("Optional case-insensitive search term across decoded policy data, e.g. firewall"),
+      decodedMaxMatches: z.number().optional().describe("Maximum decodedSearch matches to return (default 50)"),
     },
-    async ({ policyUuid, decodePolicyData }) => json(await client.getPolicy(policyUuid, decodePolicyData)),
+    async ({ policyUuid, decodePolicyData, omitRawPolicyData, includeFullDecodedPolicyData, decodedPath, decodedSearch, decodedMaxMatches }) =>
+      json(await client.getPolicy(policyUuid, {
+        enabled: Boolean(decodePolicyData || omitRawPolicyData || decodedPath || decodedSearch),
+        omitRawPolicyData,
+        includeFullDecodedPolicyData,
+        decodedPath,
+        decodedSearch,
+        decodedMaxMatches,
+      })),
   );
 
   server.tool(

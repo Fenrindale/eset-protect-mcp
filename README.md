@@ -55,6 +55,8 @@ For `create_incident_comment`, pass `{"text":"..."}`. The MCP server wraps it in
 
 Policy and assignment inventory tools support pagination with `pageSize` and `pageToken`: `list_device_groups`, `list_policies`, `list_policy_assignments`, and `list_ip_sets`. Use `get_policy` with `decodePolicyData=true` to recursively decode base64 `PolicyData` blobs into `_mcpDecodedPolicyData` for troubleshooting product settings such as firewall/network protection. If decoded policy data contains an ar archive after the first JSON object, `*.lzma` members such as `endpoint.lzma` are decompressed and exposed under `archiveMembers[].decoded`. `list_ip_sets` is limited by ESET to Common features policies; unsupported policies may return HTTP 400, while HTTP 500 with an empty body should be treated as an upstream ESET failure for the policy or tenant.
 
+For large endpoint policies, combine `get_policy` options to keep output focused: `omitRawPolicyData=true` removes raw base64 blobs, `decodedSearch="firewall"` returns decoded matches, and `decodedPath="archiveMembers[0].decoded.parsed.Settings"` extracts a specific decoded path. When `decodedPath` or `decodedSearch` is used, full decoded policy data is omitted by default; set `includeFullDecodedPolicyData=true` to include it.
+
 ESET Connect exposes only limited dedicated network/web policy mutation APIs: Network Access Protection supports `list_ip_sets`, `get_ip_set`, and `update_ip_set`; Web Access Protection supports `list_web_address_rules` and `update_web_address_rule_domains`. Other firewall rule create/update/delete work must be handled through policy data updates rather than a dedicated firewall-rule CRUD endpoint.
 
 ## Prerequisites
