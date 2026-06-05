@@ -53,6 +53,8 @@ For automation troubleshooting, `create_device_task` adds a specific hint when R
 
 For `create_incident_comment`, pass `{"text":"..."}`. The MCP server wraps it into ESET's required `{"comment":{"incidentUuid":"...","text":"..."}}` request body.
 
+Policy and assignment inventory tools support pagination with `pageSize` and `pageToken`: `list_device_groups`, `list_policies`, `list_policy_assignments`, and `list_ip_sets`. Use `get_policy` with `decodePolicyData=true` to decode base64 `PolicyData` blobs into `_mcpDecodedPolicyData` for troubleshooting product settings such as firewall/network protection. `list_ip_sets` is limited by ESET to Common features policies; unsupported policies may return HTTP 400.
+
 ## Prerequisites
 
 - **Node.js** >= 18.0.0

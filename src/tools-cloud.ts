@@ -850,9 +850,22 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "list_ip_sets",
-    "List IP sets for a policy (Network Access Protection)",
-    { policyUuid: z.string().describe("UUID of the policy") },
-    async ({ policyUuid }) => json(await client.listIpSets(policyUuid)),
+    "List IP sets for a policy (Network Access Protection). ESET supports this only for Common features policies.",
+    {
+      policyUuid: z.string().describe("UUID of the policy"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ policyUuid, pageSize, pageToken }) => {
+      try {
+        return json(await client.listIpSets(policyUuid, pageSize, pageToken));
+      } catch (error) {
+        return jsonError({
+          error: error instanceof Error ? error.message : String(error),
+          hint: "Network Access Protection IP sets are supported only for Common features policies. For other policies, ESET can return HTTP 400 with an empty body.",
+        });
+      }
+    },
   );
 
   server.tool(

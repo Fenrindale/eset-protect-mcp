@@ -111,6 +111,54 @@ function normalizeIncidentCommentData(incidentUuid: string, commentData: Record<
   };
 }
 
+function addPagingParams(params: string[], pageSize?: number, pageToken?: string): void {
+  if (pageSize) params.push(`pageSize=${pageSize}`);
+  if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+}
+
+function decodePolicyDataBlob(value: string): unknown {
+  const decoded = Buffer.from(value, "base64").toString("utf8");
+  return JSON.parse(decoded);
+}
+
+function collectDecodedPolicyData(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
+  if (!value || typeof value !== "object") return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectDecodedPolicyData(item, output, `${path}[${index}]`));
+    return;
+  }
+
+  const obj = value as Record<string, unknown>;
+  const typeValue = typeof obj["@type"] === "string" ? obj["@type"] : "";
+  if (typeof obj.data === "string" && typeValue.includes("PolicyData")) {
+    try {
+      output.push({
+        path,
+        product: obj.product,
+        decoded: decodePolicyDataBlob(obj.data),
+      });
+    } catch (error) {
+      output.push({
+        path,
+        product: obj.product,
+        error: `Failed to decode PolicyData: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  for (const [key, item] of Object.entries(obj)) {
+    collectDecodedPolicyData(item, output, `${path}.${key}`);
+  }
+}
+
+function withDecodedPolicyData(result: unknown): unknown {
+  const decodedPolicyData: Array<Record<string, unknown>> = [];
+  collectDecodedPolicyData(result, decodedPolicyData);
+  if (decodedPolicyData.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
+  return { ...(result as Record<string, unknown>), _mcpDecodedPolicyData: decodedPolicyData };
+}
+
 // ─── Cloud domain map ───────────────────────────────────────────────
 
 const CLOUD_DOMAINS: Record<string, string> = {
@@ -240,27 +288,33 @@ export class EsetClient {
 
   // ── Device Groups (On-Prem + Cloud) ───────────────────────────────
 
-  async listDeviceGroups(): Promise<unknown> {
-    return this.apiGet("device-management", "/v1/device_groups");
+  async listDeviceGroups(pageSize?: number, pageToken?: string): Promise<unknown> {
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("device-management", `/v1/device_groups${qs}`);
   }
 
   async listDevicesInGroup(groupUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     let url = `/v1/device_groups/${encodeURIComponent(groupUuid)}/devices`;
     const params: string[] = [];
-    if (pageSize) params.push(`pageSize=${pageSize}`);
-    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    addPagingParams(params, pageSize, pageToken);
     if (params.length) url += `?${params.join("&")}`;
     return this.apiGet("device-management", url);
   }
 
   // ── Policies (On-Prem + Cloud) ────────────────────────────────────
 
-  async listPolicies(): Promise<unknown> {
-    return this.apiGet("policy-management", "/v2/policies");
+  async listPolicies(pageSize?: number, pageToken?: string): Promise<unknown> {
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("policy-management", `/v2/policies${qs}`);
   }
 
-  async getPolicy(policyUuid: string): Promise<unknown> {
-    return this.apiGet("policy-management", `/v2/policies/${encodeURIComponent(policyUuid)}`);
+  async getPolicy(policyUuid: string, decodePolicyData?: boolean): Promise<unknown> {
+    const result = await this.apiGet("policy-management", `/v2/policies/${encodeURIComponent(policyUuid)}`);
+    return decodePolicyData ? withDecodedPolicyData(result) : result;
   }
 
   async createPolicy(policyData: Record<string, unknown>): Promise<unknown> {
@@ -273,8 +327,20 @@ export class EsetClient {
 
   // ── Policy Assignments (On-Prem + Cloud) ──────────────────────────
 
-  async listPolicyAssignments(): Promise<unknown> {
-    return this.apiGet("policy-management", "/v2/policy-assignments");
+  async listPolicyAssignments(filters?: {
+    policyUuid?: string;
+    deviceUuid?: string;
+    deviceGroupUuid?: string;
+    subscriptionUuid?: string;
+  }, pageSize?: number, pageToken?: string): Promise<unknown> {
+    const params: string[] = [];
+    if (filters?.policyUuid) params.push(`policyUuid=${encodeURIComponent(filters.policyUuid)}`);
+    if (filters?.deviceUuid) params.push(`target.deviceUuid=${encodeURIComponent(filters.deviceUuid)}`);
+    if (filters?.deviceGroupUuid) params.push(`target.deviceGroupUuid=${encodeURIComponent(filters.deviceGroupUuid)}`);
+    if (filters?.subscriptionUuid) params.push(`target.subscriptionUuid=${encodeURIComponent(filters.subscriptionUuid)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("policy-management", `/v2/policy-assignments${qs}`);
   }
 
   async getPolicyAssignment(assignmentUuid: string): Promise<unknown> {
@@ -809,9 +875,23 @@ export class EsetClient {
 
   // ── Network Access Protection (Cloud only) ────────────────────────
 
-  async listIpSets(policyUuid: string): Promise<unknown> {
+  async listIpSets(policyUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listIpSets");
-    return this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets`);
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    try {
+      return await this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets${qs}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("ESET API error 400") && message.includes("body=(empty)")) {
+        throw new Error(
+          `${message} | hint=Network Access Protection IP sets are supported only for Common features policies. ` +
+          "For product-specific or unsupported policies, ESET may return HTTP 400 with an empty body.",
+        );
+      }
+      throw error;
+    }
   }
 
   async getIpSet(policyUuid: string, ipSetUuid: string): Promise<unknown> {

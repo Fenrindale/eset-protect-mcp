@@ -62,8 +62,11 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
   server.tool(
     "list_device_groups",
     "List all device groups",
-    {},
-    async () => json(await client.listDeviceGroups()),
+    {
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ pageSize, pageToken }) => json(await client.listDeviceGroups(pageSize, pageToken)),
   );
 
   server.tool(
@@ -83,15 +86,21 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
   server.tool(
     "list_policies",
     "List all policies",
-    {},
-    async () => json(await client.listPolicies()),
+    {
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ pageSize, pageToken }) => json(await client.listPolicies(pageSize, pageToken)),
   );
 
   server.tool(
     "get_policy",
     "Get detailed information about a specific policy",
-    { policyUuid: z.string().describe("UUID of the policy") },
-    async ({ policyUuid }) => json(await client.getPolicy(policyUuid)),
+    {
+      policyUuid: z.string().describe("UUID of the policy"),
+      decodePolicyData: z.boolean().optional().describe("Decode base64 PolicyData blobs into _mcpDecodedPolicyData"),
+    },
+    async ({ policyUuid, decodePolicyData }) => json(await client.getPolicy(policyUuid, decodePolicyData)),
   );
 
   server.tool(
@@ -113,8 +122,16 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
   server.tool(
     "list_policy_assignments",
     "List all policy assignments",
-    {},
-    async () => json(await client.listPolicyAssignments()),
+    {
+      policyUuid: z.string().optional().describe("Filter: only assignments of this policy UUID"),
+      deviceUuid: z.string().optional().describe("Filter: assignments directly targeting this device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter: assignments directly targeting this device group UUID"),
+      subscriptionUuid: z.string().optional().describe("Filter: assignments targeting this subscription UUID"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ policyUuid, deviceUuid, deviceGroupUuid, subscriptionUuid, pageSize, pageToken }) =>
+      json(await client.listPolicyAssignments({ policyUuid, deviceUuid, deviceGroupUuid, subscriptionUuid }, pageSize, pageToken)),
   );
 
   server.tool(
