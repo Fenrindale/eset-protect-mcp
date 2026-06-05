@@ -124,6 +124,58 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
   );
 
   server.tool(
+    "build_endpoint_policy_clone_with_mutation",
+    "Build a create_policy payload by cloning an endpoint policy and modifying a decoded endpoint.lzma JSON path. Does not call ESET write APIs.",
+    {
+      policyUuid: z.string().describe("Source policy UUID"),
+      displayName: z.string().describe("Display name for the cloned policy"),
+      description: z.string().optional().describe("Optional description for the cloned policy"),
+      path: z.string().describe("Decoded endpoint policy JSON path to set or insert into, e.g. policy.data.Settings.Firewall.Rules.ce_value"),
+      valueData: z.string().describe("JSON value to set or insert"),
+      mode: z.enum(["set", "insert"]).describe("set replaces path value; insert inserts into an array path"),
+      index: z.number().optional().describe("Array insertion index for mode=insert"),
+      memberName: z.string().optional().describe("Archive member to modify (default endpoint.lzma or first .lzma member)"),
+    },
+    async ({ policyUuid, displayName, description, path, valueData, mode, index, memberName }) =>
+      json(await client.buildEndpointPolicyCloneWithMutation({
+        policyUuid,
+        displayName,
+        description,
+        path,
+        value: JSON.parse(valueData),
+        mode,
+        index,
+        memberName,
+      })),
+  );
+
+  server.tool(
+    "create_endpoint_policy_clone_with_mutation",
+    "Create a new cloned endpoint policy after modifying a decoded endpoint.lzma JSON path. The source policy is not modified.",
+    {
+      policyUuid: z.string().describe("Source policy UUID"),
+      displayName: z.string().describe("Display name for the cloned policy"),
+      description: z.string().optional().describe("Optional description for the cloned policy"),
+      path: z.string().describe("Decoded endpoint policy JSON path to set or insert into, e.g. policy.data.Settings.Firewall.Rules.ce_value"),
+      valueData: z.string().describe("JSON value to set or insert"),
+      mode: z.enum(["set", "insert"]).describe("set replaces path value; insert inserts into an array path"),
+      index: z.number().optional().describe("Array insertion index for mode=insert"),
+      memberName: z.string().optional().describe("Archive member to modify (default endpoint.lzma or first .lzma member)"),
+    },
+    async ({ policyUuid, displayName, description, path, valueData, mode, index, memberName }) =>
+      json(await client.createEndpointPolicyCloneWithMutation({
+        policyUuid,
+        displayName,
+        description,
+        path,
+        value: JSON.parse(valueData),
+        mode,
+        index,
+        memberName,
+      })),
+  );
+
+  server.tool(
     "delete_policy",
     "Delete a policy",
     { policyUuid: z.string().describe("UUID of the policy to delete") },

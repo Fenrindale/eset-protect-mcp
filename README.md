@@ -14,13 +14,13 @@ npx -y eset-protect-mcp
 
 ## Features
 
-### Shared Tools (On-Prem + Cloud) — 16 tools
+### Shared Tools (On-Prem + Cloud) — 18 tools
 
 | Category | Tools |
 |---|---|
 | **Devices** | `list_devices`, `get_device`, `batch_get_devices`, `move_device`, `rename_device` |
 | **Device Groups** | `list_device_groups`, `list_devices_in_group` |
-| **Policies** | `list_policies`, `get_policy`, `create_policy`, `delete_policy` |
+| **Policies** | `list_policies`, `get_policy`, `create_policy`, `build_endpoint_policy_clone_with_mutation`, `create_endpoint_policy_clone_with_mutation`, `delete_policy` |
 | **Policy Assignments** | `list_policy_assignments`, `get_policy_assignment`, `assign_policy`, `unassign_policy`, `update_policy_assignment_ranking` |
 
 ### Cloud-Only Tools (ESET Connect) — 78 additional tools
@@ -58,6 +58,8 @@ Policy and assignment inventory tools support pagination with `pageSize` and `pa
 For large endpoint policies, combine `get_policy` options to keep output focused: `omitRawPolicyData=true` removes raw base64 blobs, `decodedSearch="firewall"` returns decoded matches, and `decodedPath="archiveMembers[0].decoded.parsed.Settings"` extracts a specific decoded path. When `decodedPath` or `decodedSearch` is used, full decoded policy data is omitted by default; set `includeFullDecodedPolicyData=true` to include it.
 
 ESET Connect exposes only limited dedicated network/web policy mutation APIs: Network Access Protection supports `list_ip_sets`, `get_ip_set`, and `update_ip_set`; Web Access Protection supports `list_web_address_rules` and `update_web_address_rule_domains`. Other firewall rule create/update/delete work must be handled through policy data updates rather than a dedicated firewall-rule CRUD endpoint.
+
+ESET Connect does not expose an update endpoint for existing policies. To change endpoint firewall settings safely, use `build_endpoint_policy_clone_with_mutation` to generate a `create_policy` payload, or `create_endpoint_policy_clone_with_mutation` to create a cloned policy with a decoded `endpoint.lzma` JSON mutation. The source policy is not modified. Typical firewall rule insertion path: `policy.data.Settings.Firewall.Rules.ce_value`.
 
 ## Prerequisites
 

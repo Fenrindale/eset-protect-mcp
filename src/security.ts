@@ -203,7 +203,8 @@ function toolRisk(toolName: string): ToolRisk {
     toolName.startsWith("list_") ||
     toolName.startsWith("get_") ||
     toolName.startsWith("batch_get_") ||
-    toolName.startsWith("search_")
+    toolName.startsWith("search_") ||
+    toolName.startsWith("build_")
   ) {
     return "read";
   }
