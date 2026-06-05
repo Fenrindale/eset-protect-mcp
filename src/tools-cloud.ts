@@ -862,7 +862,7 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       } catch (error) {
         return jsonError({
           error: error instanceof Error ? error.message : String(error),
-          hint: "Network Access Protection IP sets are supported only for Common features policies. For other policies, ESET can return HTTP 400 with an empty body.",
+          hint: "Network Access Protection IP sets are supported only for Common features policies. Unsupported policies can return HTTP 400; HTTP 500 with an empty body can indicate an upstream ESET failure for that policy or tenant.",
         });
       }
     },

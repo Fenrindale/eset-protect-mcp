@@ -53,7 +53,9 @@ For automation troubleshooting, `create_device_task` adds a specific hint when R
 
 For `create_incident_comment`, pass `{"text":"..."}`. The MCP server wraps it into ESET's required `{"comment":{"incidentUuid":"...","text":"..."}}` request body.
 
-Policy and assignment inventory tools support pagination with `pageSize` and `pageToken`: `list_device_groups`, `list_policies`, `list_policy_assignments`, and `list_ip_sets`. Use `get_policy` with `decodePolicyData=true` to decode base64 `PolicyData` blobs into `_mcpDecodedPolicyData` for troubleshooting product settings such as firewall/network protection. `list_ip_sets` is limited by ESET to Common features policies; unsupported policies may return HTTP 400.
+Policy and assignment inventory tools support pagination with `pageSize` and `pageToken`: `list_device_groups`, `list_policies`, `list_policy_assignments`, and `list_ip_sets`. Use `get_policy` with `decodePolicyData=true` to recursively decode base64 `PolicyData` blobs into `_mcpDecodedPolicyData` for troubleshooting product settings such as firewall/network protection. `list_ip_sets` is limited by ESET to Common features policies; unsupported policies may return HTTP 400, while HTTP 500 with an empty body should be treated as an upstream ESET failure for the policy or tenant.
+
+ESET Connect exposes only limited dedicated network/web policy mutation APIs: Network Access Protection supports `list_ip_sets`, `get_ip_set`, and `update_ip_set`; Web Access Protection supports `list_web_address_rules` and `update_web_address_rule_domains`. Other firewall rule create/update/delete work must be handled through policy data updates rather than a dedicated firewall-rule CRUD endpoint.
 
 ## Prerequisites
 
