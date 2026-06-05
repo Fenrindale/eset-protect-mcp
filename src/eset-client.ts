@@ -126,19 +126,59 @@ function looksLikeBase64(value: string): boolean {
   return trimmed.length >= 16 && /^[A-Za-z0-9+/=_-]+$/.test(trimmed);
 }
 
-function decodePolicyDataBlob(value: string): { decoded: unknown; decodingLayers: number } {
+function parseJsonPrefix(value: string): { parsed: unknown; trailingBytes: number; trailingPreview?: string } {
+  try {
+    return { parsed: JSON.parse(value) as unknown, trailingBytes: 0 };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+  }
+
+  const decoder = new TextDecoder();
+  const bytes = Buffer.from(value, "utf8");
+  let candidateEnd = bytes.length;
+
+  while (candidateEnd > 0) {
+    const closeBrace = bytes.lastIndexOf(0x7d, candidateEnd - 1);
+    const closeBracket = bytes.lastIndexOf(0x5d, candidateEnd - 1);
+    const end = Math.max(closeBrace, closeBracket);
+    if (end < 0) break;
+
+    const candidate = decoder.decode(bytes.subarray(0, end + 1)).trim();
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const trailing = decoder.decode(bytes.subarray(end + 1)).trim();
+      return {
+        parsed,
+        trailingBytes: bytes.length - end - 1,
+        trailingPreview: trailing ? trailing.slice(0, 200) : undefined,
+      };
+    } catch {
+      candidateEnd = end;
+    }
+  }
+
+  return { parsed: JSON.parse(value) as unknown, trailingBytes: 0 };
+}
+
+function decodePolicyDataBlob(value: string): { decoded: unknown; decodingLayers: number; trailingBytes?: number; trailingPreview?: string } {
   let current = value;
   let lastJsonError: unknown;
 
   for (let layer = 1; layer <= 5; layer += 1) {
     const decodedText = Buffer.from(normalizeBase64(current), "base64").toString("utf8").trim();
     try {
-      const parsed = JSON.parse(decodedText) as unknown;
+      const parsedJson = parseJsonPrefix(decodedText);
+      const parsed = parsedJson.parsed;
       if (typeof parsed === "string" && looksLikeBase64(parsed)) {
         current = parsed;
         continue;
       }
-      return { decoded: parsed, decodingLayers: layer };
+      return {
+        decoded: parsed,
+        decodingLayers: layer,
+        trailingBytes: parsedJson.trailingBytes || undefined,
+        trailingPreview: parsedJson.trailingPreview,
+      };
     } catch (error) {
       lastJsonError = error;
       if (!looksLikeBase64(decodedText)) throw error;
@@ -166,6 +206,8 @@ function collectDecodedPolicyData(value: unknown, output: Array<Record<string, u
         path,
         product: obj.product,
         decodingLayers: decodedPolicyData.decodingLayers,
+        trailingBytes: decodedPolicyData.trailingBytes,
+        trailingPreview: decodedPolicyData.trailingPreview,
         decoded: decodedPolicyData.decoded,
       });
     } catch (error) {
