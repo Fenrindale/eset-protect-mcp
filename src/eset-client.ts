@@ -116,9 +116,37 @@ function addPagingParams(params: string[], pageSize?: number, pageToken?: string
   if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
 }
 
-function decodePolicyDataBlob(value: string): unknown {
-  const decoded = Buffer.from(value, "base64").toString("utf8");
-  return JSON.parse(decoded);
+function normalizeBase64(value: string): string {
+  const normalized = value.trim().replace(/-/g, "+").replace(/_/g, "/");
+  return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+}
+
+function looksLikeBase64(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.length >= 16 && /^[A-Za-z0-9+/=_-]+$/.test(trimmed);
+}
+
+function decodePolicyDataBlob(value: string): { decoded: unknown; decodingLayers: number } {
+  let current = value;
+  let lastJsonError: unknown;
+
+  for (let layer = 1; layer <= 5; layer += 1) {
+    const decodedText = Buffer.from(normalizeBase64(current), "base64").toString("utf8").trim();
+    try {
+      const parsed = JSON.parse(decodedText) as unknown;
+      if (typeof parsed === "string" && looksLikeBase64(parsed)) {
+        current = parsed;
+        continue;
+      }
+      return { decoded: parsed, decodingLayers: layer };
+    } catch (error) {
+      lastJsonError = error;
+      if (!looksLikeBase64(decodedText)) throw error;
+      current = decodedText;
+    }
+  }
+
+  throw lastJsonError instanceof Error ? lastJsonError : new Error("PolicyData remained base64 after 5 decode layers");
 }
 
 function collectDecodedPolicyData(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
@@ -133,10 +161,12 @@ function collectDecodedPolicyData(value: unknown, output: Array<Record<string, u
   const typeValue = typeof obj["@type"] === "string" ? obj["@type"] : "";
   if (typeof obj.data === "string" && typeValue.includes("PolicyData")) {
     try {
+      const decodedPolicyData = decodePolicyDataBlob(obj.data);
       output.push({
         path,
         product: obj.product,
-        decoded: decodePolicyDataBlob(obj.data),
+        decodingLayers: decodedPolicyData.decodingLayers,
+        decoded: decodedPolicyData.decoded,
       });
     } catch (error) {
       output.push({
@@ -157,6 +187,24 @@ function withDecodedPolicyData(result: unknown): unknown {
   collectDecodedPolicyData(result, decodedPolicyData);
   if (decodedPolicyData.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
   return { ...(result as Record<string, unknown>), _mcpDecodedPolicyData: decodedPolicyData };
+}
+
+async function withNetworkAccessHint(action: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      message.includes("body=(empty)") &&
+      (message.includes("ESET API error 400") || message.includes("ESET API error 500"))
+    ) {
+      throw new Error(
+        `${message} | hint=Network Access Protection API supports Common features policies only. ` +
+        "For unsupported policies ESET returns HTTP 400; HTTP 500 with an empty body can indicate an upstream ESET failure for that policy or tenant. Include request-id/x-request-id when escalating to ESET.",
+      );
+    }
+    throw error;
+  }
 }
 
 // ─── Cloud domain map ───────────────────────────────────────────────
@@ -880,28 +928,23 @@ export class EsetClient {
     const params: string[] = [];
     addPagingParams(params, pageSize, pageToken);
     const qs = params.length ? `?${params.join("&")}` : "";
-    try {
-      return await this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets${qs}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("ESET API error 400") && message.includes("body=(empty)")) {
-        throw new Error(
-          `${message} | hint=Network Access Protection IP sets are supported only for Common features policies. ` +
-          "For product-specific or unsupported policies, ESET may return HTTP 400 with an empty body.",
-        );
-      }
-      throw error;
-    }
+    return withNetworkAccessHint(() =>
+      this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets${qs}`),
+    );
   }
 
   async getIpSet(policyUuid: string, ipSetUuid: string): Promise<unknown> {
     this.requireCloud("getIpSet");
-    return this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}`);
+    return withNetworkAccessHint(() =>
+      this.apiGet("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}`),
+    );
   }
 
   async updateIpSet(policyUuid: string, ipSetUuid: string, ipSetData: Record<string, unknown>): Promise<unknown> {
     this.requireCloud("updateIpSet");
-    return this.apiPost("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}:update`, ipSetData);
+    return withNetworkAccessHint(() =>
+      this.apiPost("network-access-protection", `/v1/policies/${encodeURIComponent(policyUuid)}/ip-sets/${encodeURIComponent(ipSetUuid)}:update`, ipSetData),
+    );
   }
 
   // ── User Management (Cloud only) ──────────────────────────────────
