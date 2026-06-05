@@ -1,6 +1,6 @@
 {
   "name": "eset-protect-mcp",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Model Context Protocol (MCP) server for ESET PROTECT (On-Prem & Cloud) — manage devices, policies, detections, incidents, quarantine, and more via ESET REST API and ESET Connect",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,7 +41,8 @@
   },
   "homepage": "https://github.com/Fenrindale/eset-protect-mcp#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1"
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "lzma": "^2.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
