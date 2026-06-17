@@ -46,6 +46,18 @@ interface DecodePolicyOptions {
   decodedMaxMatches?: number;
 }
 
+interface EdrRuleExclusionSearchFilters {
+  displayName?: string;
+  ruleUuid?: string;
+  deviceUuid?: string;
+  deviceGroupUuid?: string;
+  xmlContains?: string;
+  noteContains?: string;
+  enabled?: boolean;
+  limit?: number;
+  pageSize?: number;
+}
+
 interface PolicyArchiveMember {
   name: string;
   size: number;
@@ -93,6 +105,69 @@ function containsActionName(value: unknown, candidates: string[]): boolean {
 
 function isRunCommandTask(value: unknown): boolean {
   return containsActionName(value, ["RunCommand", "Run Command", "run_command"]);
+}
+
+function lowerString(value: unknown): string {
+  return typeof value === "string" ? value.toLowerCase() : "";
+}
+
+function hasStringMember(value: unknown, expected: string): boolean {
+  if (!Array.isArray(value)) return false;
+  const expectedLower = expected.toLowerCase();
+  return value.some((item) => typeof item === "string" && item.toLowerCase() === expectedLower);
+}
+
+function hasScopeMember(value: unknown, fieldName: "deviceUuid" | "deviceGroupUuid", expected: string): boolean {
+  if (!Array.isArray(value)) return false;
+  const expectedLower = expected.toLowerCase();
+  return value.some((scope) => {
+    if (!scope || typeof scope !== "object" || Array.isArray(scope)) return false;
+    const actual = (scope as Record<string, unknown>)[fieldName];
+    return typeof actual === "string" && actual.toLowerCase() === expectedLower;
+  });
+}
+
+function matchesEdrRuleExclusion(exclusion: unknown, filters: EdrRuleExclusionSearchFilters): boolean {
+  if (!exclusion || typeof exclusion !== "object" || Array.isArray(exclusion)) return false;
+  const obj = exclusion as Record<string, unknown>;
+  let hasFilter = false;
+
+  if (filters.displayName) {
+    hasFilter = true;
+    if (!lowerString(obj.displayName).includes(filters.displayName.toLowerCase())) return false;
+  }
+
+  if (filters.ruleUuid) {
+    hasFilter = true;
+    if (!hasStringMember(obj.ruleUuids, filters.ruleUuid)) return false;
+  }
+
+  if (filters.deviceUuid) {
+    hasFilter = true;
+    if (!hasScopeMember(obj.scopes, "deviceUuid", filters.deviceUuid)) return false;
+  }
+
+  if (filters.deviceGroupUuid) {
+    hasFilter = true;
+    if (!hasScopeMember(obj.scopes, "deviceGroupUuid", filters.deviceGroupUuid)) return false;
+  }
+
+  if (filters.xmlContains) {
+    hasFilter = true;
+    if (!lowerString(obj.xmlDefinition).includes(filters.xmlContains.toLowerCase())) return false;
+  }
+
+  if (filters.noteContains) {
+    hasFilter = true;
+    if (!lowerString(obj.note).includes(filters.noteContains.toLowerCase())) return false;
+  }
+
+  if (filters.enabled !== undefined) {
+    hasFilter = true;
+    if (obj.enabled !== filters.enabled) return false;
+  }
+
+  return hasFilter;
 }
 
 function matchesExecutable(executable: unknown, filters: { displayName?: string; hashSha1?: string }): boolean {
@@ -1093,6 +1168,53 @@ export class EsetClient {
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
     const qs = params.length ? `?${params.join("&")}` : "";
     return this.apiGet("incident-management", `/v2/edr-rule-exclusions${qs}`);
+  }
+
+  async searchEdrRuleExclusions(filters: EdrRuleExclusionSearchFilters): Promise<unknown> {
+    this.requireCloud("searchEdrRuleExclusions");
+    const limit = Math.max(1, Math.min(filters.limit ?? 20, 100));
+    const pageSize = Math.max(1, Math.min(filters.pageSize ?? 1000, 1000));
+    const configuredMaxPages = Number(process.env.ESET_EDR_EXCLUSION_SEARCH_MAX_PAGES);
+    const maxPages = Number.isFinite(configuredMaxPages) && configuredMaxPages > 0 ? configuredMaxPages : 20;
+    const matches: unknown[] = [];
+    let pageToken: string | undefined;
+    let pagesScanned = 0;
+    let exclusionsScanned = 0;
+    let limitReached = false;
+
+    do {
+      pagesScanned += 1;
+      const page = await this.listEdrRuleExclusions(false, pageSize, pageToken) as Record<string, unknown>;
+      const exclusions = Array.isArray(page.exclusions) ? page.exclusions : [];
+      exclusionsScanned += exclusions.length;
+
+      for (const exclusion of exclusions) {
+        if (matchesEdrRuleExclusion(exclusion, filters)) {
+          matches.push(exclusion);
+          if (matches.length >= limit) {
+            limitReached = true;
+            break;
+          }
+        }
+      }
+
+      pageToken = typeof page.nextPageToken === "string" && page.nextPageToken ? page.nextPageToken : undefined;
+    } while (pageToken && !limitReached && pagesScanned < maxPages);
+
+    const truncated = Boolean(pageToken);
+    return {
+      exclusions: matches,
+      pagesScanned,
+      exclusionsScanned,
+      nextPageToken: pageToken,
+      truncated,
+      limitReached,
+      hint: truncated
+        ? limitReached
+          ? "Search stopped after reaching the result limit before all pages were scanned. Increase limit if you need more matches."
+          : "Increase ESET_EDR_EXCLUSION_SEARCH_MAX_PAGES to scan more pages."
+        : undefined,
+    };
   }
 
   async createEdrRuleExclusion(exclusionData: Record<string, unknown>): Promise<unknown> {

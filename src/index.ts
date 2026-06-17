@@ -28,7 +28,7 @@ import { registerSharedTools } from "./tools-shared.js";
 import { registerCloudTools } from "./tools-cloud.js";
 import { SecurityManager } from "./security.js";
 
-const VERSION = "1.4.8";
+const VERSION = "1.4.9";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
