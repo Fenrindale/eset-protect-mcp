@@ -67,6 +67,29 @@ function withDeviceTaskWarnings(result: unknown, taskData: unknown): unknown {
   return { ...(result as Record<string, unknown>), _mcpWarnings: warnings };
 }
 
+function withEdrExclusionCreateWarnings(result: unknown, requestedNote?: string): unknown {
+  if (!requestedNote) return result;
+
+  const response = result && typeof result === "object" && !Array.isArray(result)
+    ? result as Record<string, unknown>
+    : undefined;
+  const exclusion = response?.exclusion && typeof response.exclusion === "object" && !Array.isArray(response.exclusion)
+    ? response.exclusion as Record<string, unknown>
+    : undefined;
+  const returnedNote = typeof exclusion?.note === "string" ? exclusion.note : undefined;
+
+  if (returnedNote === requestedNote) return result;
+
+  const warning =
+    "MCP sent note as exclusion.note per ESET Connect schema, but the create response did not echo the same note. " +
+    "Verify with get_edr_rule_exclusion/search_edr_rule_exclusions; if it remains empty, treat it as upstream ESET API behavior.";
+
+  if (!response) return { result, _mcpWarnings: [warning] };
+
+  const existing = Array.isArray(response._mcpWarnings) ? response._mcpWarnings : [];
+  return { ...response, _mcpWarnings: [...existing, warning] };
+}
+
 function collectFailureFields(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
   if (output.length >= 50 || !value || typeof value !== "object") return;
 
@@ -429,13 +452,54 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "list_edr_rule_exclusions",
     "List EDR rule exclusions (ESET Inspect exclusions). " +
     "Returns exclusions with uuid, displayName, enabled, xmlDefinition, ruleUuids, scopes, note, authorUuid, editorUuid. " +
-    "Use this to find exclusion UUIDs for get/update/delete operations.",
+    "Use search_edr_rule_exclusions when the tenant has many exclusions and you need duplicate checks by name, rule UUID, scope, note, or XML content.",
     {
       includeTotalSize: z.boolean().optional().describe("If true, includes total_size count in response"),
       pageSize: z.number().optional().describe("Results per page (default 50, max 1000)"),
       pageToken: z.string().optional().describe("Token for next page from previous response's nextPageToken"),
     },
     async ({ includeTotalSize, pageSize, pageToken }) => json(await client.listEdrRuleExclusions(includeTotalSize, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "search_edr_rule_exclusions",
+    "Search EDR rule exclusions by scanning paginated list_edr_rule_exclusions results client-side. " +
+    "ESET Connect exposes pagination for this API but no server-side filter parameter, so this tool is intended for duplicate checks in large tenants. " +
+    "All provided filters are ANDed together.",
+    {
+      displayName: z.string().optional().describe("Case-insensitive displayName substring to match"),
+      ruleUuid: z.string().optional().describe("Exact EDR rule UUID that must appear in ruleUuids"),
+      deviceUuid: z.string().optional().describe("Exact scoped device UUID that must appear in scopes"),
+      deviceGroupUuid: z.string().optional().describe("Exact scoped device group UUID that must appear in scopes"),
+      xmlContains: z.string().optional().describe("Case-insensitive substring to find inside xmlDefinition"),
+      noteContains: z.string().optional().describe("Case-insensitive substring to find inside note"),
+      enabled: z.boolean().optional().describe("If set, match only enabled or disabled exclusions"),
+      limit: z.number().optional().describe("Maximum matches to return (default 20, max 100)"),
+      pageSize: z.number().optional().describe("Page size while scanning (default 1000, max 1000)"),
+    },
+    async ({ displayName, ruleUuid, deviceUuid, deviceGroupUuid, xmlContains, noteContains, enabled, limit, pageSize }) => {
+      const hasFilter = Boolean(
+        displayName || ruleUuid || deviceUuid || deviceGroupUuid || xmlContains || noteContains || enabled !== undefined,
+      );
+      if (!hasFilter) {
+        return jsonError({
+          error: "Provide at least one search filter.",
+          supportedFilters: ["displayName", "ruleUuid", "deviceUuid", "deviceGroupUuid", "xmlContains", "noteContains", "enabled"],
+        });
+      }
+
+      return json(await client.searchEdrRuleExclusions({
+        displayName,
+        ruleUuid,
+        deviceUuid,
+        deviceGroupUuid,
+        xmlContains,
+        noteContains,
+        enabled,
+        limit,
+        pageSize,
+      }));
+    },
   );
 
   server.tool(
@@ -492,7 +556,7 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
       try {
         const result = await client.createEdrRuleExclusion(payload);
-        return json(result);
+        return json(withEdrExclusionCreateWarnings(result, note));
       } catch (err) {
         const errMsg = String(err);
         process.stderr.write(`[eset-mcp] create_edr_rule_exclusion error: ${errMsg}\n`);
@@ -517,14 +581,14 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   server.tool(
     "get_edr_rule_exclusion",
     "Get full details of a specific EDR rule exclusion including its XML definition, enabled state, scopes, and linked rule UUIDs.",
-    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion. Use list_edr_rule_exclusions to find it.") },
+    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion. Use search_edr_rule_exclusions or list_edr_rule_exclusions to find it.") },
     async ({ exclusionUuid }) => json(await client.getEdrRuleExclusion(exclusionUuid)),
   );
 
   server.tool(
     "delete_edr_rule_exclusion",
     "Delete an EDR rule exclusion. This permanently removes the exclusion — the associated EDR rules will resume triggering on previously excluded activity.",
-    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to delete. Use list_edr_rule_exclusions to find it.") },
+    { exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to delete. Use search_edr_rule_exclusions or list_edr_rule_exclusions to find it.") },
     async ({ exclusionUuid }) => json(await client.deleteEdrRuleExclusion(exclusionUuid)),
   );
 
@@ -534,7 +598,7 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "The XML follows the ESET Inspect rules format (https://help.eset.com/ei_rules/latest/en-US/) — actions are ignored for exclusions. " +
     "The exclusion's displayName will be updated from the <description><name> element in the new XML.",
     {
-      exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to update. Use list_edr_rule_exclusions to find it."),
+      exclusionUuid: z.string().describe("UUID of the EDR rule exclusion to update. Use search_edr_rule_exclusions or list_edr_rule_exclusions to find it."),
       xmlDefinition: z.string().describe(
         "New XML definition of the EDR rule exclusion. Uses the ESET Inspect rules XML format " +
         "(spec: https://help.eset.com/ei_rules/latest/en-US/). Actions in the XML are ignored. " +
