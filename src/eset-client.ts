@@ -20,6 +20,7 @@ export interface OnPremConfig {
   username: string;
   password: string;
   verifySsl?: boolean;
+  isDomainUser?: boolean;
 }
 
 export interface CloudConfig {
@@ -30,6 +31,7 @@ export interface CloudConfig {
 }
 
 export type EsetConfig = OnPremConfig | CloudConfig;
+export type DetectionApiVersion = "auto" | "v1" | "v2";
 
 interface RawResponse {
   statusCode: number;
@@ -58,6 +60,23 @@ interface EdrRuleExclusionSearchFilters {
   pageSize?: number;
 }
 
+interface QuarantineFilters {
+  cloudOfficeTenantUuid?: string;
+  emailInternetMessageId?: string;
+  emailRecipient?: string;
+  emailSender?: string;
+  emailSubject?: string;
+  fileName?: string;
+  msSharepointRootSiteUuid?: string;
+  msTeamsTeamUuid?: string;
+  objectOrigin?: string;
+  objectType?: string;
+  quarantineReason?: string;
+  quarantineTimeStartTime?: string;
+  quarantineTimeEndTime?: string;
+  userUuid?: string;
+}
+
 interface PolicyArchiveMember {
   name: string;
   size: number;
@@ -73,6 +92,22 @@ interface DecodedPolicyContainer {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const PENDING_RETRY_DELAY_MS = 2_000;
+
+function isApiErrorStatus(error: unknown, statusCode: number): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(`ESET API error ${statusCode}`);
+}
+
+function withDetectionVersion(result: unknown, apiVersion: "v1" | "v2", fallbackFrom?: "v1"): unknown {
+  const metadata = {
+    _mcpDetectionApiVersion: apiVersion,
+    ...(fallbackFrom ? { _mcpFallbackFrom: fallbackFrom } : {}),
+  };
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return { ...(result as Record<string, unknown>), ...metadata };
+  }
+  return { result, ...metadata };
+}
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -212,6 +247,29 @@ function normalizeIncidentCommentData(incidentUuid: string, commentData: Record<
 function addPagingParams(params: string[], pageSize?: number, pageToken?: string): void {
   if (pageSize) params.push(`pageSize=${pageSize}`);
   if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+}
+
+function addDeviceScopeParams(params: string[], deviceUuid?: string, deviceGroupUuid?: string): void {
+  if (deviceUuid) params.push(`deviceUuid=${encodeURIComponent(deviceUuid)}`);
+  if (deviceGroupUuid) params.push(`deviceGroupUuid=${encodeURIComponent(deviceGroupUuid)}`);
+}
+
+function addQuarantineFilterParams(params: string[], filters?: QuarantineFilters): void {
+  if (!filters) return;
+  if (filters.cloudOfficeTenantUuid) params.push(`filter.cloudOfficeTenantUuid=${encodeURIComponent(filters.cloudOfficeTenantUuid)}`);
+  if (filters.emailInternetMessageId) params.push(`filter.emailInternetMessageId=${encodeURIComponent(filters.emailInternetMessageId)}`);
+  if (filters.emailRecipient) params.push(`filter.emailRecipient=${encodeURIComponent(filters.emailRecipient)}`);
+  if (filters.emailSender) params.push(`filter.emailSender=${encodeURIComponent(filters.emailSender)}`);
+  if (filters.emailSubject) params.push(`filter.emailSubject=${encodeURIComponent(filters.emailSubject)}`);
+  if (filters.fileName) params.push(`filter.fileName=${encodeURIComponent(filters.fileName)}`);
+  if (filters.msSharepointRootSiteUuid) params.push(`filter.msSharepointRootSiteUuid=${encodeURIComponent(filters.msSharepointRootSiteUuid)}`);
+  if (filters.msTeamsTeamUuid) params.push(`filter.msTeamsTeamUuid=${encodeURIComponent(filters.msTeamsTeamUuid)}`);
+  if (filters.objectOrigin) params.push(`filter.objectOrigin=${encodeURIComponent(filters.objectOrigin)}`);
+  if (filters.objectType) params.push(`filter.objectType=${encodeURIComponent(filters.objectType)}`);
+  if (filters.quarantineReason) params.push(`filter.quarantineReason=${encodeURIComponent(filters.quarantineReason)}`);
+  if (filters.quarantineTimeStartTime) params.push(`filter.quarantineTime.startTime=${encodeURIComponent(filters.quarantineTimeStartTime)}`);
+  if (filters.quarantineTimeEndTime) params.push(`filter.quarantineTime.endTime=${encodeURIComponent(filters.quarantineTimeEndTime)}`);
+  if (filters.userUuid) params.push(`filter.userUuid=${encodeURIComponent(filters.userUuid)}`);
 }
 
 function normalizeBase64(value: string): string {
@@ -682,14 +740,16 @@ const CLOUD_DOMAINS: Record<string, string> = {
   "asset-management": "asset-management",
   automation: "automation",
   "device-management": "device-management",
-  identity: "identity",
+  identity: "iam",
   "incident-management": "incident-management",
   "installer-management": "installer-management",
   "mobile-device-management": "mobile-device-management",
   "network-access-protection": "network-access-protection",
+  "patch-management": "patch-management",
   "policy-management": "policy-management",
   "quarantine-management": "quarantine-management",
   "user-management": "user-management",
+  "vulnerability-management": "vulnerability-management",
   "web-access-protection": "web-access-protection",
 };
 
@@ -732,7 +792,8 @@ export class EsetClient {
     const body = JSON.stringify({
       username: cfg.username,
       password: cfg.password,
-      grant_type: "password",
+      is_domain_user: cfg.isDomainUser ?? false,
+      grantType: "PASSWORD",
     });
     const res = await this.rawRequest("POST", cfg.serverUrl, "/GetTokens", body, "application/json", false);
     const data = JSON.parse(res.body);
@@ -770,10 +831,20 @@ export class EsetClient {
 
   // ── Devices (On-Prem + Cloud) ─────────────────────────────────────
 
-  async listDevices(pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listDevices(pageSize?: number, pageToken?: string, filters?: {
+    displayNames?: string[];
+    functionalityStatus?: string;
+    isMuted?: boolean;
+  }): Promise<unknown> {
     const params: string[] = [];
-    if (pageSize) params.push(`pageSize=${pageSize}`);
-    if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
+    if (this.config.mode === "cloud") {
+      for (const displayName of filters?.displayNames ?? []) {
+        params.push(`displayNames=${encodeURIComponent(displayName)}`);
+      }
+      if (filters?.functionalityStatus) params.push(`functionalityStatus=${encodeURIComponent(filters.functionalityStatus)}`);
+      if (filters?.isMuted !== undefined) params.push(`isMuted=${filters.isMuted}`);
+    }
+    addPagingParams(params, pageSize, pageToken);
     const qs = params.length ? `?${params.join("&")}` : "";
     return this.apiGet("device-management", `/v1/devices${qs}`);
   }
@@ -792,8 +863,15 @@ export class EsetClient {
   }
 
   async renameDevice(deviceUuid: string, newName: string): Promise<unknown> {
-    const action = this.config.mode === "onprem" ? ":renameDevice" : ":rename";
-    return this.apiPost("device-management", `/v1/devices/${encodeURIComponent(deviceUuid)}${action}`, { newName });
+    const basePath = `/v1/devices/${encodeURIComponent(deviceUuid)}`;
+    try {
+      return await this.apiPost("device-management", `${basePath}:rename`, { displayName: newName });
+    } catch (error) {
+      if (this.config.mode === "onprem" && isApiErrorStatus(error, 404)) {
+        return this.apiPost("device-management", `${basePath}:renameDevice`, { displayName: newName });
+      }
+      throw error;
+    }
   }
 
   async batchImportDevices(importData: Record<string, unknown>): Promise<unknown> {
@@ -810,9 +888,10 @@ export class EsetClient {
     return this.apiGet("device-management", `/v1/device_groups${qs}`);
   }
 
-  async listDevicesInGroup(groupUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listDevicesInGroup(groupUuid: string, pageSize?: number, pageToken?: string, recurseSubgroups?: boolean): Promise<unknown> {
     let url = `/v1/device_groups/${encodeURIComponent(groupUuid)}/devices`;
     const params: string[] = [];
+    if (recurseSubgroups !== undefined) params.push(`recurseSubgroups=${recurseSubgroups}`);
     addPagingParams(params, pageSize, pageToken);
     if (params.length) url += `?${params.join("&")}`;
     return this.apiGet("device-management", url);
@@ -901,12 +980,16 @@ export class EsetClient {
   // ── Policy Assignments (On-Prem + Cloud) ──────────────────────────
 
   async listPolicyAssignments(filters?: {
+    policyUuids?: string[];
     policyUuid?: string;
     deviceUuid?: string;
     deviceGroupUuid?: string;
     subscriptionUuid?: string;
   }, pageSize?: number, pageToken?: string): Promise<unknown> {
     const params: string[] = [];
+    for (const policyUuid of filters?.policyUuids ?? []) {
+      params.push(`policyUuids=${encodeURIComponent(policyUuid)}`);
+    }
     if (filters?.policyUuid) params.push(`policyUuid=${encodeURIComponent(filters.policyUuid)}`);
     if (filters?.deviceUuid) params.push(`target.deviceUuid=${encodeURIComponent(filters.deviceUuid)}`);
     if (filters?.deviceGroupUuid) params.push(`target.deviceGroupUuid=${encodeURIComponent(filters.deviceGroupUuid)}`);
@@ -929,35 +1012,32 @@ export class EsetClient {
   }
 
   async updatePolicyAssignmentRanking(assignmentUuid: string, ranking: number): Promise<unknown> {
-    return this.apiPost("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}:updateRanking`, { ranking });
+    return this.apiPost("policy-management", `/v2/policy-assignments/${encodeURIComponent(assignmentUuid)}:updateRanking`, { rank: ranking });
   }
 
-  // ── Asset Management (Cloud only) ─────────────────────────────────
+  // ── Asset Management ──────────────────────────────────────────────
 
   async createGroup(groupData: Record<string, unknown>): Promise<unknown> {
-    this.requireCloud("createGroup");
     return this.apiPost("asset-management", "/v1/groups", groupData);
   }
 
-  async deleteGroup(groupUuid: string): Promise<unknown> {
+  async deleteGroup(groupUuid: string, releaseConsumedUnits?: boolean): Promise<unknown> {
     this.requireCloud("deleteGroup");
-    return this.apiDelete("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}`);
+    const query = releaseConsumedUnits === undefined ? "" : `?releaseConsumedUnits=${releaseConsumedUnits}`;
+    return this.apiDelete("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}${query}`);
   }
 
   async moveGroup(groupUuid: string, moveData: Record<string, unknown>): Promise<unknown> {
-    this.requireCloud("moveGroup");
     return this.apiPost("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}:move`, moveData);
   }
 
   async renameGroup(groupUuid: string, newName: string): Promise<unknown> {
-    this.requireCloud("renameGroup");
-    return this.apiPost("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}:rename`, { newName });
+    return this.apiPost("asset-management", `/v1/groups/${encodeURIComponent(groupUuid)}:rename`, { displayName: newName });
   }
 
-  // ── Automation / Device Tasks (Cloud only) ────────────────────────
+  // ── Automation / Device Tasks ─────────────────────────────────────
 
   async listDeviceTasks(pageSize?: number, pageToken?: string): Promise<unknown> {
-    this.requireCloud("listDeviceTasks");
     const params: string[] = [];
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
@@ -966,7 +1046,6 @@ export class EsetClient {
   }
 
   async createDeviceTask(taskData: Record<string, unknown>): Promise<unknown> {
-    this.requireCloud("createDeviceTask");
     try {
       return await this.apiPost("automation", "/v1/device_tasks", taskData);
     } catch (error) {
@@ -982,17 +1061,14 @@ export class EsetClient {
   }
 
   async getDeviceTask(taskUuid: string): Promise<unknown> {
-    this.requireCloud("getDeviceTask");
     return this.apiGet("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}`);
   }
 
   async deleteDeviceTask(taskUuid: string): Promise<unknown> {
-    this.requireCloud("deleteDeviceTask");
     return this.apiDelete("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}`);
   }
 
   async listDeviceTaskRuns(taskUuid: string, deviceUuid?: string, listOnlyLastRuns?: boolean, pageSize?: number, pageToken?: string): Promise<unknown> {
-    this.requireCloud("listDeviceTaskRuns");
     const params: string[] = [];
     if (deviceUuid) params.push(`deviceUuid=${encodeURIComponent(deviceUuid)}`);
     if (listOnlyLastRuns !== undefined) params.push(`listOnlyLastRuns=${listOnlyLastRuns}`);
@@ -1003,25 +1079,37 @@ export class EsetClient {
   }
 
   async updateDeviceTaskTargets(taskUuid: string, targetData: Record<string, unknown>): Promise<unknown> {
-    this.requireCloud("updateDeviceTaskTargets");
     return this.apiPost("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}:updateTaskTargets`, targetData);
   }
 
   async updateDeviceTaskTriggers(taskUuid: string, triggerData: Record<string, unknown>): Promise<unknown> {
-    this.requireCloud("updateDeviceTaskTriggers");
     return this.apiPost("automation", `/v1/device_tasks/${encodeURIComponent(taskUuid)}:updateTaskTriggers`, triggerData);
   }
 
   // ── Identity (Cloud only) ─────────────────────────────────────────
 
-  async listPermissions(): Promise<unknown> {
+  async listPermissions(pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listPermissions");
-    return this.apiGet("identity", "/v2/permissions");
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("identity", `/v2/permissions${qs}`);
   }
 
-  async listRoleAssignments(): Promise<unknown> {
+  async listRoleAssignments(filters?: {
+    includeNestedScopes?: boolean;
+    subjectReference?: string;
+    subjectType?: string;
+  }, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listRoleAssignments");
-    return this.apiGet("identity", "/v2/role-assignments");
+    const params: string[] = [];
+    if (filters?.includeNestedScopes !== undefined) params.push(`includeNestedScopes=${filters.includeNestedScopes}`);
+    if (filters?.subjectReference) params.push(`subjectReference=${encodeURIComponent(filters.subjectReference)}`);
+    if (filters?.subjectType) params.push(`subjectType=${encodeURIComponent(filters.subjectType)}`);
+    if (orderBy) params.push(`orderBy=${encodeURIComponent(orderBy)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("identity", `/v2/role-assignments${qs}`);
   }
 
   async assignRole(roleData: Record<string, unknown>): Promise<unknown> {
@@ -1058,9 +1146,23 @@ export class EsetClient {
     return this.apiGet("incident-management", `/v1/detections${qs}`);
   }
 
-  async getDetection(detectionUuid: string): Promise<unknown> {
+  async getDetection(detectionUuid: string, apiVersion: DetectionApiVersion = "auto"): Promise<unknown> {
     this.requireCloud("getDetection");
-    return this.apiGet("incident-management", `/v1/detections/${encodeURIComponent(detectionUuid)}`);
+    const getVersion = async (version: "v1" | "v2", fallbackFrom?: "v1"): Promise<unknown> =>
+      withDetectionVersion(
+        await this.apiGet("incident-management", `/${version}/detections/${encodeURIComponent(detectionUuid)}`),
+        version,
+        fallbackFrom,
+      );
+
+    if (apiVersion === "v1" || apiVersion === "v2") return getVersion(apiVersion);
+
+    try {
+      return await getVersion("v1");
+    } catch (error) {
+      if (!isApiErrorStatus(error, 404)) throw error;
+      return getVersion("v2", "v1");
+    }
   }
 
   async resolveDetection(detectionUuid: string): Promise<unknown> {
@@ -1080,9 +1182,62 @@ export class EsetClient {
     return this.apiGet("incident-management", `/v2/detections${qs}`);
   }
 
-  async batchGetDetections(detectionUuids: string[]): Promise<unknown> {
+  async batchGetDetections(detectionUuids: string[], fallbackToIndividual = true): Promise<unknown> {
     this.requireCloud("batchGetDetections");
-    return this.apiPost("incident-management", "/v2/detections:batchGet", { detectionUuids });
+    try {
+      return await this.apiPost("incident-management", "/v2/detections:batchGet", { detectionUuids });
+    } catch (error) {
+      if (!fallbackToIndividual || !isApiErrorStatus(error, 404)) throw error;
+
+      const results = await Promise.allSettled(
+        detectionUuids.map(async (detectionUuid) => ({
+          detectionUuid,
+          response: await this.getDetection(detectionUuid, "auto"),
+        })),
+      );
+      const detections: unknown[] = [];
+      const resolved: Array<Record<string, unknown>> = [];
+      const errors: Array<Record<string, unknown>> = [];
+
+      results.forEach((result, index) => {
+        const detectionUuid = detectionUuids[index];
+        if (result.status === "rejected") {
+          errors.push({
+            detectionUuid,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+          return;
+        }
+
+        const response = result.value.response;
+        const responseObject = response && typeof response === "object" && !Array.isArray(response)
+          ? response as Record<string, unknown>
+          : undefined;
+        detections.push(responseObject?.detection ?? response);
+        resolved.push({
+          detectionUuid,
+          apiVersion: responseObject?._mcpDetectionApiVersion,
+        });
+      });
+
+      if (detections.length === 0) {
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${originalMessage} | hint=v2 batch lookup returned 404 and individual v1/v2 lookups also failed. ` +
+          `errors=${JSON.stringify(errors).slice(0, 1000)}`,
+        );
+      }
+
+      return {
+        detections,
+        errors,
+        _mcpBatchFallback: {
+          reason: "The official v2 batch endpoint returned 404, so MCP retried each UUID with get_detection apiVersion=auto.",
+          requested: detectionUuids.length,
+          resolved,
+        },
+      };
+    }
   }
 
   // ── Detection Groups (Cloud only) ─────────────────────────────────
@@ -1373,40 +1528,10 @@ export class EsetClient {
 
   // ── Quarantine Management (Cloud only) ────────────────────────────
 
-  async listQuarantinedObjects(filters?: {
-    cloudOfficeTenantUuid?: string;
-    emailInternetMessageId?: string;
-    emailRecipient?: string;
-    emailSender?: string;
-    emailSubject?: string;
-    fileName?: string;
-    msSharepointRootSiteUuid?: string;
-    msTeamsTeamUuid?: string;
-    objectOrigin?: string;
-    objectType?: string;
-    quarantineReason?: string;
-    quarantineTimeStartTime?: string;
-    quarantineTimeEndTime?: string;
-    userUuid?: string;
-  }, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+  async listQuarantinedObjects(filters?: QuarantineFilters, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listQuarantinedObjects");
     const params: string[] = [];
-    if (filters) {
-      if (filters.cloudOfficeTenantUuid) params.push(`filter.cloudOfficeTenantUuid=${encodeURIComponent(filters.cloudOfficeTenantUuid)}`);
-      if (filters.emailInternetMessageId) params.push(`filter.emailInternetMessageId=${encodeURIComponent(filters.emailInternetMessageId)}`);
-      if (filters.emailRecipient) params.push(`filter.emailRecipient=${encodeURIComponent(filters.emailRecipient)}`);
-      if (filters.emailSender) params.push(`filter.emailSender=${encodeURIComponent(filters.emailSender)}`);
-      if (filters.emailSubject) params.push(`filter.emailSubject=${encodeURIComponent(filters.emailSubject)}`);
-      if (filters.fileName) params.push(`filter.fileName=${encodeURIComponent(filters.fileName)}`);
-      if (filters.msSharepointRootSiteUuid) params.push(`filter.msSharepointRootSiteUuid=${encodeURIComponent(filters.msSharepointRootSiteUuid)}`);
-      if (filters.msTeamsTeamUuid) params.push(`filter.msTeamsTeamUuid=${encodeURIComponent(filters.msTeamsTeamUuid)}`);
-      if (filters.objectOrigin) params.push(`filter.objectOrigin=${encodeURIComponent(filters.objectOrigin)}`);
-      if (filters.objectType) params.push(`filter.objectType=${encodeURIComponent(filters.objectType)}`);
-      if (filters.quarantineReason) params.push(`filter.quarantineReason=${encodeURIComponent(filters.quarantineReason)}`);
-      if (filters.quarantineTimeStartTime) params.push(`filter.quarantineTime.startTime=${encodeURIComponent(filters.quarantineTimeStartTime)}`);
-      if (filters.quarantineTimeEndTime) params.push(`filter.quarantineTime.endTime=${encodeURIComponent(filters.quarantineTimeEndTime)}`);
-      if (filters.userUuid) params.push(`filter.userUuid=${encodeURIComponent(filters.userUuid)}`);
-    }
+    addQuarantineFilterParams(params, filters);
     if (orderBy) params.push(`orderBy=${encodeURIComponent(orderBy)}`);
     if (pageSize) params.push(`pageSize=${pageSize}`);
     if (pageToken) params.push(`pageToken=${encodeURIComponent(pageToken)}`);
@@ -1419,9 +1544,12 @@ export class EsetClient {
     return this.apiGet("quarantine-management", `/v1/quarantined-objects/${encodeURIComponent(objectUuid)}`);
   }
 
-  async getQuarantineCount(): Promise<unknown> {
+  async getQuarantineCount(filters?: QuarantineFilters): Promise<unknown> {
     this.requireCloud("getQuarantineCount");
-    return this.apiGet("quarantine-management", "/v1/quarantined-objects/count");
+    const params: string[] = [];
+    addQuarantineFilterParams(params, filters);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("quarantine-management", `/v1/quarantined-objects/count${qs}`);
   }
 
   async batchDeleteQuarantinedObjects(objectUuids: string[]): Promise<unknown> {
@@ -1456,9 +1584,13 @@ export class EsetClient {
 
   // ── Installer Management (Cloud only) ─────────────────────────────
 
-  async listInstallers(): Promise<unknown> {
+  async listInstallers(usable?: boolean, pageSize?: number, pageToken?: string): Promise<unknown> {
     this.requireCloud("listInstallers");
-    return this.apiGet("installer-management", "/v1/installers");
+    const params: string[] = [];
+    if (usable !== undefined) params.push(`usable=${usable}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("installer-management", `/v1/installers${qs}`);
   }
 
   async getInstaller(installerUuid: string): Promise<unknown> {
@@ -1493,6 +1625,86 @@ export class EsetClient {
     return this.apiPost("mobile-device-management", "/v1/mobile-devices:batchGetEnrollmentLinks", enrollmentData);
   }
 
+  // Patch Management (Cloud only)
+
+  async listRecentApplicationPatchingDetails(): Promise<unknown> {
+    this.requireCloud("listRecentApplicationPatchingDetails");
+    return this.apiGet("patch-management", "/v1/application-patching-processes/recent/details");
+  }
+
+  async listDevicePatches(filters?: {
+    deviceUuid?: string;
+    deviceGroupUuid?: string;
+    patchType?: string;
+  }, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDevicePatches");
+    const params: string[] = [];
+    addDeviceScopeParams(params, filters?.deviceUuid, filters?.deviceGroupUuid);
+    if (filters?.patchType) params.push(`patchType=${encodeURIComponent(filters.patchType)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("patch-management", `/v1/device-patches${qs}`);
+  }
+
+  async listPatchingProcessDetails(filters?: {
+    deviceUuid?: string;
+    deviceGroupUuid?: string;
+    startTime?: string;
+    endTime?: string;
+  }, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listPatchingProcessDetails");
+    const params: string[] = [];
+    addDeviceScopeParams(params, filters?.deviceUuid, filters?.deviceGroupUuid);
+    if (filters?.startTime) params.push(`timePeriod.startTime=${encodeURIComponent(filters.startTime)}`);
+    if (filters?.endTime) params.push(`timePeriod.endTime=${encodeURIComponent(filters.endTime)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("patch-management", `/v1/patching-process-details${qs}`);
+  }
+
+  // Vulnerability Management (Cloud only)
+
+  async listDeviceOsVulnerabilities(deviceUuid?: string, deviceGroupUuid?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDeviceOsVulnerabilities");
+    const params: string[] = [];
+    addDeviceScopeParams(params, deviceUuid, deviceGroupUuid);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("vulnerability-management", `/v1/device-os-vulnerabilities${qs}`);
+  }
+
+  async listDeviceVulnerabilities(filters?: {
+    deviceUuid?: string;
+    deviceGroupUuid?: string;
+    vulnerabilityScope?: string;
+  }, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listDeviceVulnerabilities");
+    const params: string[] = [];
+    addDeviceScopeParams(params, filters?.deviceUuid, filters?.deviceGroupUuid);
+    if (filters?.vulnerabilityScope) params.push(`vulnerabilityScope=${encodeURIComponent(filters.vulnerabilityScope)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("vulnerability-management", `/v1/device-vulnerabilities${qs}`);
+  }
+
+  async listRecentVulnerabilityScans(deviceUuid?: string, deviceGroupUuid?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listRecentVulnerabilityScans");
+    const params: string[] = [];
+    addDeviceScopeParams(params, deviceUuid, deviceGroupUuid);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("vulnerability-management", `/v1/scans/recent${qs}`);
+  }
+
+  async listVulnerableDevices(deviceGroupUuid?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listVulnerableDevices");
+    const params: string[] = [];
+    if (deviceGroupUuid) params.push(`deviceGroupUuid=${encodeURIComponent(deviceGroupUuid)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("vulnerability-management", `/v1/vulnerable-devices${qs}`);
+  }
+
   // ── Network Access Protection (Cloud only) ────────────────────────
 
   async listIpSets(policyUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
@@ -1522,6 +1734,13 @@ export class EsetClient {
   // ── User Management (Cloud only) ──────────────────────────────────
 
   async listUsers(filters?: {
+    activeProductAutoActivated?: boolean;
+    activeProductAutoActivationBase?: string;
+    activeProductAutoActivationUserGroupUuid?: string;
+    activeProductSubscriptionUuid?: string;
+    activeProductUnitPoolUuid?: string;
+    activeProductId?: number;
+    activeProductName?: string;
     displayName?: string;
     email?: string;
     protectionStatus?: string;
@@ -1532,6 +1751,13 @@ export class EsetClient {
     this.requireCloud("listUsers");
     const params: string[] = [];
     if (filters) {
+      if (filters.activeProductAutoActivated !== undefined) params.push(`activeProduct.autoActivated=${filters.activeProductAutoActivated}`);
+      if (filters.activeProductAutoActivationBase) params.push(`activeProduct.autoActivationDetails.base=${encodeURIComponent(filters.activeProductAutoActivationBase)}`);
+      if (filters.activeProductAutoActivationUserGroupUuid) params.push(`activeProduct.autoActivationDetails.userGroupUuid=${encodeURIComponent(filters.activeProductAutoActivationUserGroupUuid)}`);
+      if (filters.activeProductSubscriptionUuid) params.push(`activeProduct.subscriptionUuid=${encodeURIComponent(filters.activeProductSubscriptionUuid)}`);
+      if (filters.activeProductUnitPoolUuid) params.push(`activeProduct.unitPoolUuid=${encodeURIComponent(filters.activeProductUnitPoolUuid)}`);
+      if (filters.activeProductId !== undefined) params.push(`activeProduct.id=${filters.activeProductId}`);
+      if (filters.activeProductName) params.push(`activeProduct.name=${encodeURIComponent(filters.activeProductName)}`);
       if (filters.displayName) params.push(`displayName=${encodeURIComponent(filters.displayName)}`);
       if (filters.email) params.push(`email=${encodeURIComponent(filters.email)}`);
       if (filters.protectionStatus) params.push(`protectionStatus=${encodeURIComponent(filters.protectionStatus)}`);
@@ -1552,19 +1778,32 @@ export class EsetClient {
 
   async batchGetUsers(userUuids: string[]): Promise<unknown> {
     this.requireCloud("batchGetUsers");
-    return this.apiPost("user-management", "/v1/users:batchGetUsers", { userUuids });
+    return this.apiPost("user-management", "/v1/users:batchGetUsers", { usersUuids: userUuids });
   }
 
   // ── Web Access Protection (Cloud only) ────────────────────────────
 
-  async listWebAddressRules(policyUuid: string): Promise<unknown> {
+  async listWebAddressRules(policyUuid: string, includeDomain?: string): Promise<unknown> {
     this.requireCloud("listWebAddressRules");
-    return this.apiGet("web-access-protection", `/v2/policies/${encodeURIComponent(policyUuid)}/web-address-rules`);
+    const query = includeDomain ? `?includeDomain=${encodeURIComponent(includeDomain)}` : "";
+    return this.apiGet("web-access-protection", `/v2/policies/${encodeURIComponent(policyUuid)}/web-address-rules${query}`);
   }
 
   async updateWebAddressRuleDomains(policyUuid: string, addressRuleUuid: string, domainData: Record<string, unknown>): Promise<unknown> {
     this.requireCloud("updateWebAddressRuleDomains");
     return this.apiPut("web-access-protection", `/v2/policies/${encodeURIComponent(policyUuid)}/web-address-rules/${encodeURIComponent(addressRuleUuid)}/domains`, domainData);
+  }
+
+  // Server Configuration (On-Prem 13.1+ only)
+
+  async getServerConfigurationValue(path: string): Promise<unknown> {
+    this.requireOnPrem("getServerConfigurationValue");
+    return this.apiGet("configuration", `/v2:configuration:getValue?path=${encodeURIComponent(path)}`);
+  }
+
+  async batchGetServerConfigurationValues(paths: string[]): Promise<unknown> {
+    this.requireOnPrem("batchGetServerConfigurationValues");
+    return this.apiPost("configuration", "/v2/configuration:batchGetValues", { paths });
   }
 
   // ── Internal helpers ──────────────────────────────────────────────
@@ -1579,6 +1818,12 @@ export class EsetClient {
     await this.ensureAuth();
     const res = await this.rawRequest("GET", this.baseUrl(cat), path, undefined, "application/json", true);
     return this.parseApiResponse(res, {});
+  }
+
+  private requireOnPrem(method: string): void {
+    if (this.config.mode !== "onprem") {
+      throw new Error(`${method} is only available in ESET PROTECT On-Prem mode. Current mode: cloud`);
+    }
   }
 
   private async apiPost(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {

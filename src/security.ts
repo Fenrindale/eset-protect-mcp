@@ -258,8 +258,16 @@ function collectScopedValues(value: unknown, values: { devices: Set<string>; gro
       }
     };
 
-    if (key === "deviceUuid" || key === "deviceUuids") pushOne(values.devices, item);
-    if (key === "groupUuid" || key === "groupUuids" || key === "deviceGroupUuid" || key === "newParentUuid" || key === "parentUuid") {
+    if (key === "deviceUuid" || key === "deviceUuids" || key === "devicesUuids") pushOne(values.devices, item);
+    if (
+      key === "groupUuid" ||
+      key === "groupUuids" ||
+      key === "deviceGroupUuid" ||
+      key === "deviceGroupUuids" ||
+      key === "deviceGroupsUuids" ||
+      key === "newParentUuid" ||
+      key === "parentUuid"
+    ) {
       pushOne(values.groups, item);
     }
     if (key === "ruleUuid" || key === "ruleUuids") pushOne(values.rules, item);

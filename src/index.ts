@@ -14,6 +14,7 @@
  *     ESET_USERNAME    - API username
  *     ESET_PASSWORD    - API password
  *     ESET_VERIFY_SSL  - "false" to allow self-signed certs (default: "true")
+ *     ESET_IS_DOMAIN_USER - "true" for an Active Directory API user
  *
  *   Cloud mode:
  *     ESET_REGION      - Region: eu, de, us, jpn, ca
@@ -25,10 +26,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { EsetClient, type EsetConfig, type EsetRegion } from "./eset-client.js";
 import { registerSharedTools } from "./tools-shared.js";
+import { registerManagementTools } from "./tools-management.js";
 import { registerCloudTools } from "./tools-cloud.js";
+import { registerOnPremTools } from "./tools-onprem.js";
 import { SecurityManager } from "./security.js";
 
-const VERSION = "1.4.9";
+const VERSION = "1.5.0";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -56,7 +59,8 @@ function buildConfig(): EsetConfig {
 
   const serverUrl = requireEnv("ESET_SERVER_URL");
   const verifySsl = process.env.ESET_VERIFY_SSL !== "false";
-  return { mode: "onprem", serverUrl, username, password, verifySsl };
+  const isDomainUser = process.env.ESET_IS_DOMAIN_USER === "true";
+  return { mode: "onprem", serverUrl, username, password, verifySsl, isDomainUser };
 }
 
 async function main(): Promise<void> {
@@ -74,10 +78,13 @@ async function main(): Promise<void> {
 
   // Register tools available in both modes
   registerSharedTools(server, client);
+  registerManagementTools(server, client);
 
-  // Register cloud-only tools when in cloud mode
+  // Register mode-specific tools.
   if (config.mode === "cloud") {
     registerCloudTools(server, client);
+  } else {
+    registerOnPremTools(server, client);
   }
 
   // Register local security control tools after ESET tools.

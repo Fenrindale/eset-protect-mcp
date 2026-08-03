@@ -17,10 +17,14 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
     "list_devices",
     "List managed devices with optional pagination",
     {
-      pageSize: z.number().optional().describe("Results per page (max 10000, default 100)"),
+      displayNames: z.array(z.string()).optional().describe("Cloud filter: exact device display names"),
+      functionalityStatus: z.string().optional().describe("Cloud filter: device functionality status"),
+      isMuted: z.boolean().optional().describe("Cloud filter: muted state"),
+      pageSize: z.number().optional().describe("Results per page (limits differ between Cloud and On-Prem)"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ pageSize, pageToken }) => json(await client.listDevices(pageSize, pageToken)),
+    async ({ displayNames, functionalityStatus, isMuted, pageSize, pageToken }) =>
+      json(await client.listDevices(pageSize, pageToken, { displayNames, functionalityStatus, isMuted })),
   );
 
   server.tool(
@@ -74,11 +78,12 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
     "List devices in a specific device group",
     {
       groupUuid: z.string().describe("UUID of the device group"),
+      recurseSubgroups: z.boolean().optional().describe("Include devices from nested groups"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ groupUuid, pageSize, pageToken }) =>
-      json(await client.listDevicesInGroup(groupUuid, pageSize, pageToken)),
+    async ({ groupUuid, recurseSubgroups, pageSize, pageToken }) =>
+      json(await client.listDevicesInGroup(groupUuid, pageSize, pageToken, recurseSubgroups)),
   );
 
   // ── Policies ──────────────────────────────────────────────────────
@@ -189,14 +194,15 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
     "List all policy assignments",
     {
       policyUuid: z.string().optional().describe("Filter: only assignments of this policy UUID"),
+      policyUuids: z.array(z.string()).optional().describe("Filter: assignments of any listed policy UUID"),
       deviceUuid: z.string().optional().describe("Filter: assignments directly targeting this device UUID"),
       deviceGroupUuid: z.string().optional().describe("Filter: assignments directly targeting this device group UUID"),
       subscriptionUuid: z.string().optional().describe("Filter: assignments targeting this subscription UUID"),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ policyUuid, deviceUuid, deviceGroupUuid, subscriptionUuid, pageSize, pageToken }) =>
-      json(await client.listPolicyAssignments({ policyUuid, deviceUuid, deviceGroupUuid, subscriptionUuid }, pageSize, pageToken)),
+    async ({ policyUuid, policyUuids, deviceUuid, deviceGroupUuid, subscriptionUuid, pageSize, pageToken }) =>
+      json(await client.listPolicyAssignments({ policyUuid, policyUuids, deviceUuid, deviceGroupUuid, subscriptionUuid }, pageSize, pageToken)),
   );
 
   server.tool(
@@ -209,7 +215,7 @@ export function registerSharedTools(server: McpServer, client: EsetClient): void
   server.tool(
     "assign_policy",
     "Assign a policy to a device or group",
-    { assignmentData: z.string().describe("JSON string of assignment config (policyUuid, targetUuid, etc.)") },
+    { assignmentData: z.string().describe("JSON request body using the official {assignment:{policyUuid,target}} wrapper") },
     async ({ assignmentData }) => json(await client.assignPolicy(JSON.parse(assignmentData))),
   );
 

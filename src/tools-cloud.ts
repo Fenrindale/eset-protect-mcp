@@ -15,58 +15,6 @@ function jsonError(result: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: true };
 }
 
-function normalizedAction(value: string): string {
-  return value.toLowerCase().replace(/[\s_-]+/g, "");
-}
-
-function containsActionName(value: unknown, candidates: string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  if (Array.isArray(value)) return value.some((item) => containsActionName(item, candidates));
-
-  const obj = value as Record<string, unknown>;
-  for (const [key, item] of Object.entries(obj)) {
-    if ((key === "name" || key === "action" || key === "type") && typeof item === "string") {
-      const normalized = normalizedAction(item);
-      if (candidates.some((candidate) => normalized.includes(normalizedAction(candidate)))) return true;
-    }
-    if (containsActionName(item, candidates)) return true;
-  }
-  return false;
-}
-
-function numericField(value: unknown, fieldName: string): number | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = numericField(item, fieldName);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
-  const obj = value as Record<string, unknown>;
-  const direct = obj[fieldName];
-  if (typeof direct === "number") return direct;
-  for (const item of Object.values(obj)) {
-    const found = numericField(item, fieldName);
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-function withDeviceTaskWarnings(result: unknown, taskData: unknown): unknown {
-  const warnings: string[] = [];
-  if (containsActionName(taskData, ["KillProcessByPid", "Kill Process By Pid"])) {
-    const pid = numericField(taskData, "pid");
-    if (!pid) {
-      warnings.push(
-        "KillProcessByPid was submitted without a non-zero pid. ESET may normalize hash-only requests to pid=0; check list_device_task_runs with includeFailureSummary=true for execution failure details.",
-      );
-    }
-  }
-  if (warnings.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
-  return { ...(result as Record<string, unknown>), _mcpWarnings: warnings };
-}
-
 function withEdrExclusionCreateWarnings(result: unknown, requestedNote?: string): unknown {
   if (!requestedNote) return result;
 
@@ -90,38 +38,6 @@ function withEdrExclusionCreateWarnings(result: unknown, requestedNote?: string)
   return { ...response, _mcpWarnings: [...existing, warning] };
 }
 
-function collectFailureFields(value: unknown, output: Array<Record<string, unknown>>, path = "$"): void {
-  if (output.length >= 50 || !value || typeof value !== "object") return;
-
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => collectFailureFields(item, output, `${path}[${index}]`));
-    return;
-  }
-
-  const obj = value as Record<string, unknown>;
-  for (const [key, item] of Object.entries(obj)) {
-    const keyLower = key.toLowerCase();
-    const currentPath = `${path}.${key}`;
-    const keyLooksRelevant = /error|reason|message|status|result|failure|failed|exitcode/.test(keyLower);
-
-    if (typeof item === "string") {
-      const valueLooksRelevant = /fail|error|denied|timeout|not[_ ]?supported|pid|2fa/i.test(item);
-      if (keyLooksRelevant || valueLooksRelevant) output.push({ path: currentPath, value: item });
-    } else if (typeof item === "number") {
-      if ((keyLower === "exitcode" || keyLower.endsWith("exitcode")) && item !== 0) output.push({ path: currentPath, value: item });
-    } else {
-      collectFailureFields(item, output, currentPath);
-    }
-  }
-}
-
-function withFailureSummary(result: unknown): unknown {
-  const failureSummary: Array<Record<string, unknown>> = [];
-  collectFailureFields(result, failureSummary);
-  if (failureSummary.length === 0 || !result || typeof result !== "object" || Array.isArray(result)) return result;
-  return { ...(result as Record<string, unknown>), _mcpFailureSummary: failureSummary };
-}
-
 export function registerCloudTools(server: McpServer, client: EsetClient): void {
   // ── Device Management (Cloud extras) ──────────────────────────────
 
@@ -135,136 +51,42 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   // ── Asset Management ──────────────────────────────────────────────
 
   server.tool(
-    "create_group",
-    "Create a new static group",
-    { groupData: z.string().describe("JSON string of group config (e.g. {name, parentUuid})") },
-    async ({ groupData }) => json(await client.createGroup(JSON.parse(groupData))),
-  );
-
-  server.tool(
     "delete_group",
     "Delete a static group",
-    { groupUuid: z.string().describe("UUID of the group to delete") },
-    async ({ groupUuid }) => json(await client.deleteGroup(groupUuid)),
-  );
-
-  server.tool(
-    "move_group",
-    "Move a static group to a new parent",
     {
-      groupUuid: z.string().describe("UUID of the group to move"),
-      moveData: z.string().describe("JSON string with move target (e.g. {newParentUuid})"),
+      groupUuid: z.string().describe("UUID of the group to delete"),
+      releaseConsumedUnits: z.boolean().optional().describe("Release license units consumed by devices in the deleted group"),
     },
-    async ({ groupUuid, moveData }) => json(await client.moveGroup(groupUuid, JSON.parse(moveData))),
-  );
-
-  server.tool(
-    "rename_group",
-    "Rename a static group",
-    {
-      groupUuid: z.string().describe("UUID of the group"),
-      newName: z.string().describe("New name for the group"),
-    },
-    async ({ groupUuid, newName }) => json(await client.renameGroup(groupUuid, newName)),
+    async ({ groupUuid, releaseConsumedUnits }) => json(await client.deleteGroup(groupUuid, releaseConsumedUnits)),
   );
 
   // ── Automation / Device Tasks ─────────────────────────────────────
-
-  server.tool(
-    "list_device_tasks",
-    "List all device tasks (client tasks)",
-    {
-      pageSize: z.number().optional().describe("Results per page"),
-      pageToken: z.string().optional().describe("Token for next page"),
-    },
-    async ({ pageSize, pageToken }) => json(await client.listDeviceTasks(pageSize, pageToken)),
-  );
-
-  server.tool(
-    "create_device_task",
-    "Create a new device task (e.g. scan, isolate, run command, shutdown)",
-    { taskData: z.string().describe("JSON string of task config (action.name, targets, triggers, etc.)") },
-    async ({ taskData }) => {
-      const parsedTaskData = JSON.parse(taskData);
-      try {
-        return json(withDeviceTaskWarnings(await client.createDeviceTask(parsedTaskData), parsedTaskData));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return jsonError({
-          error: message,
-          hint: message.includes("Run Command task creation returned HTTP 500")
-            ? "Run Command can be rejected upstream by ESET security requirements such as 2FA/interactive authorization. Verify the API user's requirements and the task wrapper payload."
-            : undefined,
-        });
-      }
-    },
-  );
-
-  server.tool(
-    "get_device_task",
-    "Get details of a specific device task",
-    { taskUuid: z.string().describe("UUID of the task") },
-    async ({ taskUuid }) => json(await client.getDeviceTask(taskUuid)),
-  );
-
-  server.tool(
-    "delete_device_task",
-    "Delete a device task",
-    { taskUuid: z.string().describe("UUID of the task to delete") },
-    async ({ taskUuid }) => json(await client.deleteDeviceTask(taskUuid)),
-  );
-
-  server.tool(
-    "list_device_task_runs",
-    "List execution runs of a device task",
-    {
-      taskUuid: z.string().describe("UUID of the task"),
-      deviceUuid: z.string().optional().describe("Filter: only runs on this specific device UUID"),
-      listOnlyLastRuns: z.boolean().optional().describe("If true, only return the latest run per device"),
-      includeFailureSummary: z.boolean().optional().describe("Append _mcpFailureSummary with relevant status/error/reason fields"),
-      pageSize: z.number().optional().describe("Results per page"),
-      pageToken: z.string().optional().describe("Token for next page"),
-    },
-    async ({ taskUuid, deviceUuid, listOnlyLastRuns, includeFailureSummary, pageSize, pageToken }) => {
-      const result = await client.listDeviceTaskRuns(taskUuid, deviceUuid, listOnlyLastRuns, pageSize, pageToken);
-      return json(includeFailureSummary ? withFailureSummary(result) : result);
-    },
-  );
-
-  server.tool(
-    "update_device_task_targets",
-    "Update the target devices/groups of a task",
-    {
-      taskUuid: z.string().describe("UUID of the task"),
-      targetData: z.string().describe("JSON string of target config (deviceUuids, groupUuids)"),
-    },
-    async ({ taskUuid, targetData }) => json(await client.updateDeviceTaskTargets(taskUuid, JSON.parse(targetData))),
-  );
-
-  server.tool(
-    "update_device_task_triggers",
-    "Update the triggers of a task",
-    {
-      taskUuid: z.string().describe("UUID of the task"),
-      triggerData: z.string().describe("JSON string of trigger config"),
-    },
-    async ({ taskUuid, triggerData }) => json(await client.updateDeviceTaskTriggers(taskUuid, JSON.parse(triggerData))),
-  );
 
   // ── Identity ──────────────────────────────────────────────────────
 
   server.tool(
     "list_permissions",
     "List all available permissions",
-    {},
-    async () => json(await client.listPermissions()),
+    {
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ pageSize, pageToken }) => json(await client.listPermissions(pageSize, pageToken)),
   );
 
   server.tool(
     "list_role_assignments",
     "List all role assignments",
-    {},
-    async () => json(await client.listRoleAssignments()),
+    {
+      includeNestedScopes: z.boolean().optional().describe("Include assignments inherited through nested scopes"),
+      subjectReference: z.string().optional().describe("Filter by subject reference"),
+      subjectType: z.string().optional().describe("Filter by subject type"),
+      orderBy: z.string().optional().describe("Sort expression"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ includeNestedScopes, subjectReference, subjectType, orderBy, pageSize, pageToken }) =>
+      json(await client.listRoleAssignments({ includeNestedScopes, subjectReference, subjectType }, orderBy, pageSize, pageToken)),
   );
 
   server.tool(
@@ -327,9 +149,12 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "get_detection",
-    "Get detailed information about a specific detection",
-    { detectionUuid: z.string().describe("UUID of the detection") },
-    async ({ detectionUuid }) => json(await client.getDetection(detectionUuid)),
+    "Get a detection using v1, v2, or automatic v1-to-v2 fallback",
+    {
+      detectionUuid: z.string().describe("UUID of the detection"),
+      apiVersion: z.enum(["auto", "v1", "v2"]).optional().describe("API version; auto tries v1 and retries v2 on 404"),
+    },
+    async ({ detectionUuid, apiVersion }) => json(await client.getDetection(detectionUuid, apiVersion)),
   );
 
   server.tool(
@@ -341,9 +166,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "batch_get_detections",
-    "Get multiple detections by UUIDs",
-    { detectionUuids: z.array(z.string()).describe("Array of detection UUIDs") },
-    async ({ detectionUuids }) => json(await client.batchGetDetections(detectionUuids)),
+    "Get multiple detections by UUIDs with optional individual v1/v2 fallback when the atomic v2 batch endpoint returns 404",
+    {
+      detectionUuids: z.array(z.string()).min(1).describe("Array of detection UUIDs"),
+      fallbackToIndividual: z.boolean().optional().describe("Retry each UUID with get_detection apiVersion=auto after a batch 404 (default true)"),
+    },
+    async ({ detectionUuids, fallbackToIndividual }) =>
+      json(await client.batchGetDetections(detectionUuids, fallbackToIndividual ?? true)),
   );
 
   // ── Detection Groups ──────────────────────────────────────────────
@@ -810,9 +639,30 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
 
   server.tool(
     "get_quarantine_count",
-    "Get the total count of quarantined objects",
-    {},
-    async () => json(await client.getQuarantineCount()),
+    "Get the count of quarantined objects matching optional filters",
+    {
+      fileName: z.string().optional().describe("Filter by quarantined file name"),
+      objectOrigin: z.string().optional().describe("Filter by object origin"),
+      objectType: z.string().optional().describe("Filter by object type"),
+      quarantineReason: z.string().optional().describe("Filter by quarantine reason"),
+      quarantineTimeStartTime: z.string().optional().describe("Quarantine time start in ISO 8601 format"),
+      quarantineTimeEndTime: z.string().optional().describe("Quarantine time end in ISO 8601 format"),
+      userUuid: z.string().optional().describe("Filter by user UUID"),
+      cloudOfficeTenantUuid: z.string().optional().describe("Filter by cloud office tenant UUID"),
+      emailSender: z.string().optional().describe("Filter by email sender"),
+      emailRecipient: z.string().optional().describe("Filter by email recipient"),
+      emailSubject: z.string().optional().describe("Filter by email subject"),
+      emailInternetMessageId: z.string().optional().describe("Filter by email Message-ID"),
+      msSharepointRootSiteUuid: z.string().optional().describe("Filter by SharePoint root site UUID"),
+      msTeamsTeamUuid: z.string().optional().describe("Filter by Teams team UUID"),
+    },
+    async ({ fileName, objectOrigin, objectType, quarantineReason, quarantineTimeStartTime, quarantineTimeEndTime, userUuid, cloudOfficeTenantUuid, emailSender, emailRecipient, emailSubject, emailInternetMessageId, msSharepointRootSiteUuid, msTeamsTeamUuid }) =>
+      json(await client.getQuarantineCount({
+        fileName, objectOrigin, objectType, quarantineReason,
+        quarantineTimeStartTime, quarantineTimeEndTime, userUuid,
+        cloudOfficeTenantUuid, emailSender, emailRecipient, emailSubject,
+        emailInternetMessageId, msSharepointRootSiteUuid, msTeamsTeamUuid,
+      })),
   );
 
   server.tool(
@@ -862,8 +712,12 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   server.tool(
     "list_installers",
     "List created installers",
-    {},
-    async () => json(await client.listInstallers()),
+    {
+      usable: z.boolean().optional().describe("Filter by whether the installer can still be used"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ usable, pageSize, pageToken }) => json(await client.listInstallers(usable, pageSize, pageToken)),
   );
 
   server.tool(
@@ -908,6 +762,98 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "Get enrollment links for mobile devices in batch",
     { enrollmentData: z.string().describe("JSON string of enrollment request data") },
     async ({ enrollmentData }) => json(await client.batchGetEnrollmentLinks(JSON.parse(enrollmentData))),
+  );
+
+  // Patch Management
+
+  server.tool(
+    "list_recent_application_patching_details",
+    "List recent application patching process details",
+    {},
+    async () => json(await client.listRecentApplicationPatchingDetails()),
+  );
+
+  server.tool(
+    "list_device_patches",
+    "List application patches for devices or device groups",
+    {
+      deviceUuid: z.string().optional().describe("Filter by device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      patchType: z.string().optional().describe("Filter by patch type"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceUuid, deviceGroupUuid, patchType, pageSize, pageToken }) =>
+      json(await client.listDevicePatches({ deviceUuid, deviceGroupUuid, patchType }, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "list_patching_process_details",
+    "List patching process details for devices or device groups",
+    {
+      deviceUuid: z.string().optional().describe("Filter by device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      startTime: z.string().optional().describe("Time period start in ISO 8601 format"),
+      endTime: z.string().optional().describe("Time period end in ISO 8601 format"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceUuid, deviceGroupUuid, startTime, endTime, pageSize, pageToken }) =>
+      json(await client.listPatchingProcessDetails({ deviceUuid, deviceGroupUuid, startTime, endTime }, pageSize, pageToken)),
+  );
+
+  // Vulnerability Management
+
+  server.tool(
+    "list_device_os_vulnerabilities",
+    "List operating system vulnerabilities for devices or device groups",
+    {
+      deviceUuid: z.string().optional().describe("Filter by device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceUuid, deviceGroupUuid, pageSize, pageToken }) =>
+      json(await client.listDeviceOsVulnerabilities(deviceUuid, deviceGroupUuid, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "list_device_vulnerabilities",
+    "List application vulnerabilities for devices or device groups",
+    {
+      deviceUuid: z.string().optional().describe("Filter by device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      vulnerabilityScope: z.string().optional().describe("Filter by vulnerability scope"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceUuid, deviceGroupUuid, vulnerabilityScope, pageSize, pageToken }) =>
+      json(await client.listDeviceVulnerabilities({ deviceUuid, deviceGroupUuid, vulnerabilityScope }, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "list_recent_vulnerability_scans",
+    "List recent vulnerability scan details",
+    {
+      deviceUuid: z.string().optional().describe("Filter by device UUID"),
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceUuid, deviceGroupUuid, pageSize, pageToken }) =>
+      json(await client.listRecentVulnerabilityScans(deviceUuid, deviceGroupUuid, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "list_vulnerable_devices",
+    "List devices with known vulnerabilities",
+    {
+      deviceGroupUuid: z.string().optional().describe("Filter by device group UUID"),
+      pageSize: z.number().optional().describe("Results per page"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ deviceGroupUuid, pageSize, pageToken }) =>
+      json(await client.listVulnerableDevices(deviceGroupUuid, pageSize, pageToken)),
   );
 
   // ── Network Access Protection ─────────────────────────────────────
@@ -961,6 +907,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "List users (ESET Cloud Office Security). Supports filtering by display name, email, protection status, user group, tenant, and license. " +
     "protectionStatus values: UNPROTECTED, PENDING, PARTIALLY_PROTECTED, FULLY_PROTECTED.",
     {
+      activeProductAutoActivated: z.boolean().optional().describe("Filter by active product auto-activation state"),
+      activeProductAutoActivationBase: z.string().optional().describe("Filter by active product auto-activation base"),
+      activeProductAutoActivationUserGroupUuid: z.string().optional().describe("Filter by auto-activation user group UUID"),
+      activeProductSubscriptionUuid: z.string().optional().describe("Filter by active product subscription UUID"),
+      activeProductUnitPoolUuid: z.string().optional().describe("Filter by active product unit pool UUID"),
+      activeProductId: z.number().optional().describe("Filter by active product ID"),
+      activeProductName: z.string().optional().describe("Filter by active product name"),
       displayName: z.string().optional().describe("Filter by display name (partial match)"),
       email: z.string().optional().describe("Filter by email (partial match across primary + proxy addresses)"),
       protectionStatus: z.string().optional().describe("Filter by status: UNPROTECTED, PENDING, PARTIALLY_PROTECTED, FULLY_PROTECTED"),
@@ -970,8 +923,12 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
     },
-    async ({ displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense, pageSize, pageToken }) =>
-      json(await client.listUsers({ displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense }, pageSize, pageToken)),
+    async ({ activeProductAutoActivated, activeProductAutoActivationBase, activeProductAutoActivationUserGroupUuid, activeProductSubscriptionUuid, activeProductUnitPoolUuid, activeProductId, activeProductName, displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense, pageSize, pageToken }) =>
+      json(await client.listUsers({
+        activeProductAutoActivated, activeProductAutoActivationBase, activeProductAutoActivationUserGroupUuid,
+        activeProductSubscriptionUuid, activeProductUnitPoolUuid, activeProductId, activeProductName,
+        displayName, email, protectionStatus, userGroupUuid, cloudOfficeTenantReference, hasCloudOfficeMsLicense,
+      }, pageSize, pageToken)),
   );
 
   server.tool(
@@ -993,8 +950,11 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   server.tool(
     "list_web_address_rules",
     "List web address rules for a policy",
-    { policyUuid: z.string().describe("UUID of the policy") },
-    async ({ policyUuid }) => json(await client.listWebAddressRules(policyUuid)),
+    {
+      policyUuid: z.string().describe("UUID of the policy"),
+      includeDomain: z.string().optional().describe("Return only rules that include this domain"),
+    },
+    async ({ policyUuid, includeDomain }) => json(await client.listWebAddressRules(policyUuid, includeDomain)),
   );
 
   server.tool(
