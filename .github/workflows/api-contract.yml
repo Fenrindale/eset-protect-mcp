@@ -1,0 +1,30 @@
+name: ESET API contract drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 1 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Compare current ESET Connect Swagger
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check API contract
+        run: npm run check:api-contract

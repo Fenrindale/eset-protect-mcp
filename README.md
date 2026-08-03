@@ -14,7 +14,7 @@ npx -y eset-protect-mcp
 
 ## Features
 
-### Shared Tools (On-Prem + Cloud) — 18 tools
+### Shared Tools (On-Prem 13.1+ and Cloud) — 28 tools
 
 | Category | Tools |
 |---|---|
@@ -22,14 +22,15 @@ npx -y eset-protect-mcp
 | **Device Groups** | `list_device_groups`, `list_devices_in_group` |
 | **Policies** | `list_policies`, `get_policy`, `create_policy`, `build_endpoint_policy_clone_with_mutation`, `create_endpoint_policy_clone_with_mutation`, `delete_policy` |
 | **Policy Assignments** | `list_policy_assignments`, `get_policy_assignment`, `assign_policy`, `unassign_policy`, `update_policy_assignment_ranking` |
+| **Asset Management** | `create_group`, `move_group`, `rename_group` |
+| **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
 
-### Cloud-Only Tools (ESET Connect) — 79 additional tools
+### Cloud-Only Tools (ESET Connect) — 76 additional tools
 
 | Category | Tools |
 |---|---|
 | **Devices (extra)** | `batch_import_devices` |
-| **Asset Management** | `create_group`, `delete_group`, `move_group`, `rename_group` |
-| **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
+| **Asset Management** | `delete_group` |
 | **Identity** | `list_permissions`, `list_role_assignments`, `assign_role`, `revoke_role`, `create_role`, `delete_role` |
 | **Detections** | `list_detections`, `list_detections_v2`, `get_detection`, `resolve_detection`, `batch_get_detections` |
 | **Detection Groups** | `list_detection_groups`, `get_detection_group`, `resolve_detection_group`, `search_detection_groups` |
@@ -41,11 +42,21 @@ npx -y eset-protect-mcp
 | **Quarantine** | `list_quarantined_objects`, `get_quarantined_object`, `get_quarantine_count`, `batch_delete_quarantined_objects`, `batch_download_quarantined_objects`, `batch_restore_quarantined_objects`, `download_quarantined_object`, `purge_quarantined_objects`, `restore_quarantined_object` |
 | **Installers** | `list_installers`, `get_installer`, `create_installer`, `delete_installer`, `generate_gpo_sccm_file` |
 | **Mobile Devices** | `batch_activate_mobile_product`, `batch_get_enrollment_links` |
+| **Patch Management** | `list_recent_application_patching_details`, `list_device_patches`, `list_patching_process_details` |
+| **Vulnerability Management** | `list_device_os_vulnerabilities`, `list_device_vulnerabilities`, `list_recent_vulnerability_scans`, `list_vulnerable_devices` |
 | **Network Access** | `list_ip_sets`, `get_ip_set`, `update_ip_set` |
 | **Users** | `list_users`, `get_user`, `batch_get_users` |
 | **Web Access** | `list_web_address_rules`, `update_web_address_rule_domains` |
 
+### On-Prem-Only Tools (13.1+) — 2 additional tools
+
+| Category | Tools |
+|---|---|
+| **Server Configuration** | `get_server_configuration_value`, `batch_get_server_configuration_values` |
+
 Incident filters use unquoted enum constants. For example, use `status==INCIDENT_STATUS_OPEN`, not `status=="INCIDENT_STATUS_OPEN"`.
+
+`get_detection` defaults to `apiVersion=auto`: it calls v1 first and retries the official v2 endpoint after a 404. `batch_get_detections` uses ESET's atomic v2 batch endpoint first and, by default, retries UUIDs individually with the same version-aware behavior after a batch 404. Set `fallbackToIndividual=false` to preserve atomic failure behavior.
 
 Use `search_executables` with `hashSha1` or `displayName` to resolve the `executableUuid` required by `block_executable`. ESET exposes executable listing with pagination only, so the MCP server scans pages client-side.
 
@@ -65,8 +76,8 @@ ESET Connect does not expose an update endpoint for existing policies. To change
 
 ## Prerequisites
 
-- **Node.js** >= 18.0.0
-- **On-Prem**: ESET PROTECT On-Prem 13.0+ with REST API enabled
+- **Node.js** >= 20.0.0
+- **On-Prem**: ESET PROTECT On-Prem 13.1+ with REST API enabled for the full tool set. Version 13.0 remains supported for its smaller API surface, including the legacy device rename action.
 - **Cloud**: ESET Business Account / ESET PROTECT Hub with API user (Integrations enabled)
 
 ## Installation
@@ -97,6 +108,7 @@ npm run build
 | `ESET_PASSWORD` | Yes | API password |
 | `ESET_SERVER_URL` | On-Prem only | Server URL (e.g., `https://protect-server:9443`) |
 | `ESET_VERIFY_SSL` | On-Prem only | `false` to allow self-signed certs (default: `true`) |
+| `ESET_IS_DOMAIN_USER` | On-Prem only | `true` when authenticating an Active Directory API user (default: `false`) |
 | `ESET_REGION` | Cloud only | `eu`, `de`, `us`, `jpn`, or `ca` |
 | `ESET_REQUEST_TIMEOUT_MS` | No | HTTP request timeout in milliseconds (default: `120000`) |
 | `ESET_EXECUTABLE_SEARCH_MAX_PAGES` | No | Max pages scanned by `search_executables` (default: `20`) |
@@ -126,6 +138,8 @@ The server includes a local policy gate before any ESET API call. The default `l
 | `scoped` | Enforce configured UUID allowlists and require approval for `high_write` and `destructive` tools by default |
 
 Write tools are classified as `low_write`, `high_write`, or `destructive`. When approval is required, the first tool call returns `approvalRequired`, writes a pending approval record, and does not call ESET. A human can then approve it with the local `approve_action` tool or by writing a matching JSON approval file under `ESET_APPROVALS_DIR`. Approved actions are one-shot and are consumed after execution.
+
+Patch, vulnerability, configuration, and other inventory tools retain the `read` classification. The shared group and automation write tools use the same approval and sandbox gate in both Cloud and On-Prem modes.
 
 Two local security tools are always registered:
 
@@ -266,8 +280,11 @@ git clone https://github.com/Fenrindale/eset-protect-mcp.git
 cd eset-protect-mcp
 npm install
 npm run build
+npm test
 npm start
 ```
+
+Run `npm run check:api-contract` to compare implemented Cloud routes with the current official ESET Connect Swagger. The weekly `ESET API contract drift` workflow runs the same check without credentials.
 
 ## Release
 
