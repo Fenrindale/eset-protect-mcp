@@ -1377,6 +1377,59 @@ export class EsetClient {
     return this.apiPost("incident-management", "/v2/edr-rule-exclusions", exclusionData);
   }
 
+  async createEdrRuleExclusionsBatch(
+    exclusions: Record<string, unknown>[],
+    stopOnError = true,
+  ): Promise<{
+    requested: number;
+    attempted: number;
+    createdCount: number;
+    failedCount: number;
+    stoppedEarly: boolean;
+    results: Array<
+      | { index: number; status: "created"; response: unknown }
+      | { index: number; status: "failed"; error: string }
+    >;
+    retryWarning?: string;
+  }> {
+    this.requireCloud("createEdrRuleExclusionsBatch");
+    const results: Array<
+      | { index: number; status: "created"; response: unknown }
+      | { index: number; status: "failed"; error: string }
+    > = [];
+
+    for (const [index, exclusion] of exclusions.entries()) {
+      try {
+        const response = await this.createEdrRuleExclusion({ exclusion });
+        results.push({ index, status: "created", response });
+      } catch (error) {
+        results.push({
+          index,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (stopOnError) break;
+      }
+    }
+
+    const createdCount = results.filter((result) => result.status === "created").length;
+    const failedCount = results.length - createdCount;
+    return {
+      requested: exclusions.length,
+      attempted: results.length,
+      createdCount,
+      failedCount,
+      stoppedEarly: results.length < exclusions.length,
+      results,
+      ...(createdCount > 0 && failedCount > 0
+        ? {
+            retryWarning:
+              "This batch partially succeeded. Do not retry the entire batch because already-created exclusions may be duplicated.",
+          }
+        : {}),
+    };
+  }
+
   async getEdrRuleExclusion(exclusionUuid: string): Promise<unknown> {
     this.requireCloud("getEdrRuleExclusion");
     return this.apiGet("incident-management", `/v2/edr-rule-exclusions/${encodeURIComponent(exclusionUuid)}`);

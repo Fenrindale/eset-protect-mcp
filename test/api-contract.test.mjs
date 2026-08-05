@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { EsetClient } from "../dist/eset-client.js";
+import {
+  countDistinctSha1LikeValues,
+  edrRuleExclusionCreateFailure,
+} from "../dist/edr-exclusions.js";
 import { SecurityManager } from "../dist/security.js";
 import { registerCloudTools } from "../dist/tools-cloud.js";
 import { registerManagementTools } from "../dist/tools-management.js";
@@ -243,13 +247,13 @@ test("On-Prem 13.1 configuration paths use the documented routes", async () => {
 });
 
 test("Cloud and On-Prem tool sets register without duplicate names", () => {
-  const cloudServer = new McpServer({ name: "cloud-test", version: "1.5.0" });
+  const cloudServer = new McpServer({ name: "cloud-test", version: "1.5.1" });
   const cloud = cloudClient();
   registerSharedTools(cloudServer, cloud);
   registerManagementTools(cloudServer, cloud);
   registerCloudTools(cloudServer, cloud);
 
-  const onPremServer = new McpServer({ name: "onprem-test", version: "1.5.0" });
+  const onPremServer = new McpServer({ name: "onprem-test", version: "1.5.1" });
   const onPrem = new EsetClient({
     mode: "onprem",
     serverUrl: "https://protect.example.test:9443",
@@ -327,4 +331,110 @@ test("scoped mode enforces official automation target UUID keys", async () => {
   assert.equal(ran, false);
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /blocked-device|blocked-group/);
+});
+
+test("EDR exclusion failures identify multi-SHA1 WAF rejections without exposing hashes", () => {
+  const firstSha1 = "a".repeat(40);
+  const secondSha1 = "b".repeat(40);
+  const xmlDefinition = `<rule><condition value="${firstSha1}"/><condition value="${secondSha1}"/></rule>`;
+  const error =
+    "ESET API error 403 | body=Request Rejected | Support ID: 534ed38a-ee82-49b0-a5b3-d84f5568c59d";
+
+  assert.equal(countDistinctSha1LikeValues(xmlDefinition), 2);
+  const failure = edrRuleExclusionCreateFailure(error, {
+    enabled: true,
+    xmlDefinition,
+    ruleUuids: ["rule-1"],
+  });
+
+  assert.equal(failure.upstreamRejection.kind, "ESET_WAF_REQUEST_REJECTED");
+  assert.equal(failure.upstreamRejection.automaticRetry, false);
+  assert.equal(failure.upstreamRejection.recommendedTool, "create_edr_rule_exclusions_batch");
+  assert.equal(failure.payloadSent.sha1LikeValuesCount, 2);
+  assert.match(failure.hint, /one SHA1 per item/);
+  assert.match(failure.error, /534ed38a-ee82-49b0-a5b3-d84f5568c59d/);
+  assert.doesNotMatch(JSON.stringify(failure), new RegExp(firstSha1));
+  assert.doesNotMatch(JSON.stringify(failure), new RegExp(secondSha1));
+});
+
+test("EDR exclusion batch uses sequential official single-create requests", async () => {
+  const client = cloudClient();
+  const calls = [];
+  client.apiPost = async (category, path, body) => {
+    calls.push({ category, path, body });
+    if (body.exclusion.note === "fail") {
+      throw new Error("ESET API error 403 | body=Request Rejected");
+    }
+    return { exclusion: { uuid: `created-${calls.length}` } };
+  };
+  const exclusions = [
+    { enabled: true, xmlDefinition: "<rule>one</rule>", ruleUuids: ["rule-1"], note: "one" },
+    { enabled: true, xmlDefinition: "<rule>two</rule>", ruleUuids: ["rule-1"], note: "fail" },
+    { enabled: true, xmlDefinition: "<rule>three</rule>", ruleUuids: ["rule-1"], note: "three" },
+  ];
+
+  const stopped = await client.createEdrRuleExclusionsBatch(exclusions);
+  assert.equal(stopped.requested, 3);
+  assert.equal(stopped.attempted, 2);
+  assert.equal(stopped.createdCount, 1);
+  assert.equal(stopped.failedCount, 1);
+  assert.equal(stopped.stoppedEarly, true);
+  assert.match(stopped.retryWarning, /Do not retry the entire batch/);
+  assert.deepEqual(calls.map(({ category, path }) => ({ category, path })), [
+    { category: "incident-management", path: "/v2/edr-rule-exclusions" },
+    { category: "incident-management", path: "/v2/edr-rule-exclusions" },
+  ]);
+  assert.deepEqual(calls[0].body, { exclusion: exclusions[0] });
+
+  calls.length = 0;
+  const continued = await client.createEdrRuleExclusionsBatch(exclusions, false);
+  assert.equal(continued.attempted, 3);
+  assert.equal(continued.createdCount, 2);
+  assert.equal(continued.failedCount, 1);
+  assert.equal(continued.stoppedEarly, false);
+});
+
+test("scoped mode rejects a batch containing any global EDR exclusion", async () => {
+  const security = new SecurityManager({
+    mode: "scoped",
+    allowedTools: null,
+    deniedTools: new Set(),
+    approvalRules: new Set(),
+    approvalDir: ".eset-mcp/test-approvals",
+    approvalTtlMs: 60_000,
+    allowGlobalScope: false,
+    allowedDeviceUuids: null,
+    allowedGroupUuids: new Set(["allowed-group"]),
+    allowedRuleUuids: new Set(["allowed-rule"]),
+  });
+  const scopedItem = {
+    enabled: true,
+    xmlDefinition: "<rule/>",
+    ruleUuids: ["allowed-rule"],
+    scopes: [{ deviceGroupUuid: "allowed-group" }],
+  };
+  let ran = false;
+
+  const denied = await security.guard(
+    "create_edr_rule_exclusions_batch",
+    { exclusions: [scopedItem, { ...scopedItem, scopes: undefined }] },
+    async () => {
+      ran = true;
+      return { content: [{ type: "text", text: "unexpected" }] };
+    },
+  );
+  assert.equal(ran, false);
+  assert.equal(denied.isError, true);
+  assert.match(denied.content[0].text, /global EDR rule exclusions/);
+
+  const allowed = await security.guard(
+    "create_edr_rule_exclusions_batch",
+    { exclusions: [scopedItem, scopedItem] },
+    async () => {
+      ran = true;
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  );
+  assert.equal(ran, true);
+  assert.equal(allowed.isError, undefined);
 });

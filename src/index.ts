@@ -31,7 +31,7 @@ import { registerCloudTools } from "./tools-cloud.js";
 import { registerOnPremTools } from "./tools-onprem.js";
 import { SecurityManager } from "./security.js";
 
-const VERSION = "1.5.0";
+const VERSION = "1.5.1";
 
 function requireEnv(name: string): string {
   const value = process.env[name];
