@@ -25,7 +25,7 @@ npx -y eset-protect-mcp
 | **Asset Management** | `create_group`, `move_group`, `rename_group` |
 | **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
 
-### Cloud-Only Tools (ESET Connect) — 76 additional tools
+### Cloud-Only Tools (ESET Connect) — 77 additional tools
 
 | Category | Tools |
 |---|---|
@@ -35,7 +35,7 @@ npx -y eset-protect-mcp
 | **Detections** | `list_detections`, `list_detections_v2`, `get_detection`, `resolve_detection`, `batch_get_detections` |
 | **Detection Groups** | `list_detection_groups`, `get_detection_group`, `resolve_detection_group`, `search_detection_groups` |
 | **EDR Rules** | `list_edr_rules`, `create_edr_rule`, `get_edr_rule`, `delete_edr_rule`, `enable_edr_rule`, `disable_edr_rule`, `update_edr_rule_definition` |
-| **EDR Rule Exclusions** | `list_edr_rule_exclusions`, `search_edr_rule_exclusions`, `create_edr_rule_exclusion`, `get_edr_rule_exclusion`, `delete_edr_rule_exclusion`, `update_edr_rule_exclusion_definition` |
+| **EDR Rule Exclusions** | `list_edr_rule_exclusions`, `search_edr_rule_exclusions`, `create_edr_rule_exclusion`, `create_edr_rule_exclusions_batch`, `get_edr_rule_exclusion`, `delete_edr_rule_exclusion`, `update_edr_rule_exclusion_definition` |
 | **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, `update_incident_attributes` |
 | **Incident Comments** | `list_incident_comments`, `create_incident_comment`, `get_incident_comment`, `delete_incident_comment`, `update_incident_comment_text` |
 | **Executables** | `list_executables`, `search_executables`, `get_executable`, `block_executable`, `unblock_executable` |
@@ -61,6 +61,8 @@ Incident filters use unquoted enum constants. For example, use `status==INCIDENT
 Use `search_executables` with `hashSha1` or `displayName` to resolve the `executableUuid` required by `block_executable`. ESET exposes executable listing with pagination only, so the MCP server scans pages client-side.
 
 Use `search_edr_rule_exclusions` before creating exclusions in large tenants. ESET Connect exposes EDR rule exclusion listing with pagination only, so the MCP server scans pages client-side and filters by display name, rule UUID, scoped device/device group UUID, XML content, note text, and enabled state. `create_edr_rule_exclusion` sends notes as `exclusion.note` per ESET's schema; if ESET returns an empty note in the create response, the tool adds `_mcpWarnings` so callers can verify with `get_edr_rule_exclusion` or `search_edr_rule_exclusions`.
+
+Some ESET/WAF configurations reject exclusion XML that combines multiple SHA1 conditions even when each SHA1 works separately. Use `create_edr_rule_exclusions_batch` with separate complete XML definitions, normally one SHA1 per item. The tool calls the official single-create endpoint sequentially, stops on the first error by default, reports partial success, and never rewrites or automatically retries XML. Do not retry an entire partially successful batch because that can create duplicates.
 
 For automation troubleshooting, `create_device_task` adds a specific hint when Run Command task creation returns an empty-body HTTP 500. Use `list_device_task_runs` with `includeFailureSummary=true` to append `_mcpFailureSummary` from status, error, reason, and exit-code fields.
 

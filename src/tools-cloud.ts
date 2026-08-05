@@ -6,6 +6,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { EsetClient } from "./eset-client.js";
+import {
+  edrRuleExclusionCreateFailure,
+  type EdrRuleExclusionInput,
+} from "./edr-exclusions.js";
 
 function json(result: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -37,6 +41,26 @@ function withEdrExclusionCreateWarnings(result: unknown, requestedNote?: string)
   const existing = Array.isArray(response._mcpWarnings) ? response._mcpWarnings : [];
   return { ...response, _mcpWarnings: [...existing, warning] };
 }
+
+const edrRuleExclusionScopeSchema = z.object({
+  deviceUuid: z.string().optional().describe("Device UUID included in this exclusion scope"),
+  deviceGroupUuid: z.string().optional().describe("Device group UUID included in this exclusion scope"),
+}).refine(
+  (scope) => Boolean(scope.deviceUuid || scope.deviceGroupUuid),
+  { message: "Each scope requires deviceUuid or deviceGroupUuid." },
+);
+
+const edrRuleExclusionBatchItemSchema = z.object({
+  enabled: z.boolean().describe("Whether this exclusion should be active immediately"),
+  xmlDefinition: z.string().min(1).describe(
+    "One complete ESET Inspect exclusion XML definition. For WAF-sensitive hash exclusions, normally include only one SHA1 value per item.",
+  ),
+  ruleUuids: z.array(z.string()).min(1).describe("EDR rule UUIDs to which this exclusion applies"),
+  note: z.string().max(2048).optional().describe("Optional exclusion note"),
+  scopes: z.array(edrRuleExclusionScopeSchema).min(1).optional().describe(
+    "Optional device/device-group scopes. If omitted, this item applies globally.",
+  ),
+});
 
 export function registerCloudTools(server: McpServer, client: EsetClient): void {
   // ── Device Management (Cloud extras) ──────────────────────────────
@@ -390,20 +414,55 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
         const errMsg = String(err);
         process.stderr.write(`[eset-mcp] create_edr_rule_exclusion error: ${errMsg}\n`);
         // Return structured error instead of throwing — helps AI see what went wrong
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({
-            error: errMsg,
-            hint: "Ensure ruleUuids contains valid EDR rule UUIDs (use list_edr_rules) and xmlDefinition is valid ESET Inspect XML.",
-            payloadSent: {
-              exclusionKeys: Object.keys(exclusion),
-              ruleUuidsCount: ruleUuids.length,
-              xmlDefinitionLength: xmlDefinition.length,
-              scopesCount: Array.isArray(parsedScopes) ? parsedScopes.length : 0,
-            },
-          }, null, 2) }],
-          isError: true,
-        };
+        return jsonError(edrRuleExclusionCreateFailure(err, exclusion));
       }
+    },
+  );
+
+  server.tool(
+    "create_edr_rule_exclusions_batch",
+    "Create multiple EDR rule exclusions sequentially through ESET's official single-create endpoint. " +
+    "Use this when ESET/WAF rejects one XML definition that combines multiple SHA1 conditions: provide separate, " +
+    "complete XML definitions, normally one SHA1 per item. This operation is not atomic and MCP never rewrites or " +
+    "automatically retries exclusion XML.",
+    {
+      exclusions: z.array(edrRuleExclusionBatchItemSchema).min(1).max(20).describe(
+        "1-20 complete EDR rule exclusions. Every item is sent as a separate POST /v2/edr-rule-exclusions request.",
+      ),
+      stopOnError: z.boolean().optional().describe(
+        "Stop after the first failed item (default true). Set false to attempt remaining items. Never retry a partially successful batch as a whole.",
+      ),
+    },
+    async ({ exclusions, stopOnError }) => {
+      const prepared: EdrRuleExclusionInput[] = exclusions.map((item) => ({
+        enabled: item.enabled,
+        xmlDefinition: item.xmlDefinition,
+        ruleUuids: item.ruleUuids,
+        ...(item.note ? { note: item.note } : {}),
+        ...(item.scopes ? { scopes: item.scopes } : {}),
+      }));
+      process.stderr.write(
+        `[eset-mcp] create_edr_rule_exclusions_batch payload metadata: exclusions=${prepared.length}, ` +
+        `stopOnError=${stopOnError ?? true}, xmlDefinitionLengthTotal=${prepared.reduce((sum, item) => sum + item.xmlDefinition.length, 0)}\n`,
+      );
+
+      const result = await client.createEdrRuleExclusionsBatch(prepared, stopOnError ?? true);
+      const detailedResults = result.results.map((entry) => {
+        const requested = prepared[entry.index];
+        if (entry.status === "created") {
+          return {
+            ...entry,
+            response: withEdrExclusionCreateWarnings(entry.response, requested?.note),
+          };
+        }
+        return {
+          index: entry.index,
+          status: entry.status,
+          ...edrRuleExclusionCreateFailure(entry.error, requested ?? {}),
+        };
+      });
+      const output = { ...result, results: detailedResults };
+      return result.failedCount > 0 ? jsonError(output) : json(output);
     },
   );
 

@@ -289,6 +289,17 @@ function hasNonEmptyScopes(args: Record<string, unknown>): boolean {
   return Array.isArray(parsed) && parsed.length > 0;
 }
 
+function createsGlobalEdrRuleExclusion(toolName: string, args: Record<string, unknown>): boolean {
+  if (toolName === "create_edr_rule_exclusion") return !hasNonEmptyScopes(args);
+  if (toolName !== "create_edr_rule_exclusions_batch") return false;
+
+  const exclusions = args.exclusions;
+  if (!Array.isArray(exclusions) || exclusions.length === 0) return true;
+  return exclusions.some((item) =>
+    !item || typeof item !== "object" || Array.isArray(item) || !hasNonEmptyScopes(item as Record<string, unknown>)
+  );
+}
+
 export class SecurityManager {
   private readonly config: SecurityConfig;
 
@@ -428,7 +439,11 @@ export class SecurityManager {
       return null;
     }
 
-    if (this.config.mode === "scoped" && toolName === "create_edr_rule_exclusion" && !this.config.allowGlobalScope && !hasNonEmptyScopes(args)) {
+    if (
+      this.config.mode === "scoped" &&
+      !this.config.allowGlobalScope &&
+      createsGlobalEdrRuleExclusion(toolName, args)
+    ) {
       return { reason: "Scoped mode blocks global EDR rule exclusions unless ESET_ALLOW_GLOBAL_SCOPE=true." };
     }
 
