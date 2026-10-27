@@ -874,6 +874,44 @@ export class EsetClient {
     }
   }
 
+  async listInstalledApplications(deviceUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listInstalledApplications");
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet(
+      "device-management",
+      `/v1/devices/${encodeURIComponent(deviceUuid)}/applications${qs}`,
+    );
+  }
+
+  async setMasterDevice(deviceUuid: string, cloningConfiguration?: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("setMasterDevice");
+    return this.apiPost(
+      "device-management",
+      `/v1/devices/${encodeURIComponent(deviceUuid)}:setMasterDevice`,
+      cloningConfiguration ? { cloningConfiguration } : {},
+    );
+  }
+
+  async unsetMasterDevice(deviceUuid: string): Promise<unknown> {
+    this.requireCloud("unsetMasterDevice");
+    return this.apiPost(
+      "device-management",
+      `/v1/devices/${encodeURIComponent(deviceUuid)}:unsetMasterDevice`,
+      {},
+    );
+  }
+
+  async updateDeviceDescription(deviceUuid: string, description: string): Promise<unknown> {
+    this.requireCloud("updateDeviceDescription");
+    return this.apiPost(
+      "device-management",
+      `/v1/devices/${encodeURIComponent(deviceUuid)}:updateDescription`,
+      { description },
+    );
+  }
+
   async batchImportDevices(importData: Record<string, unknown>): Promise<unknown> {
     this.requireCloud("batchImportDevices");
     return this.apiPost("device-management", "/v1/devices:batchImport", importData);
@@ -1514,6 +1552,157 @@ export class EsetClient {
     return this.apiPost("incident-management", `/v2/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}/text:update`, textData);
   }
 
+  // ── Incident Management v3 (Cloud only) ──────────────────────────
+
+  async listIncidentsV3(filter?: string, orderBy?: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listIncidentsV3");
+    const params: string[] = [];
+    if (filter) params.push(`filter=${encodeURIComponent(filter)}`);
+    if (orderBy) params.push(`orderBy=${encodeURIComponent(orderBy)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v3/incidents${qs}`);
+  }
+
+  async getIncidentV3(incidentUuid: string): Promise<unknown> {
+    this.requireCloud("getIncidentV3");
+    return this.apiGet("incident-management", `/v3/incidents/${encodeURIComponent(incidentUuid)}`);
+  }
+
+  async updateIncidentV3(incidentUuid: string, incidentData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("updateIncidentV3");
+    return this.apiPatch(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}`,
+      incidentData,
+    );
+  }
+
+  async closeIncidentV3(incidentUuid: string, closureReason?: string, finalCommentText?: string): Promise<unknown> {
+    this.requireCloud("closeIncidentV3");
+    const body: Record<string, unknown> = {};
+    if (closureReason) body.closureReason = closureReason;
+    if (finalCommentText) body.finalComment = { text: finalCommentText };
+    return this.apiPost("incident-management", `/v3/incidents/${encodeURIComponent(incidentUuid)}:close`, body);
+  }
+
+  async reopenIncidentV3(incidentUuid: string, commentText?: string): Promise<unknown> {
+    this.requireCloud("reopenIncidentV3");
+    const body: Record<string, unknown> = {};
+    if (commentText) body.comment = { text: commentText };
+    return this.apiPost("incident-management", `/v3/incidents/${encodeURIComponent(incidentUuid)}:reopen`, body);
+  }
+
+  async startIncidentProgressV3(incidentUuid: string, assigneeUuid?: string): Promise<unknown> {
+    this.requireCloud("startIncidentProgressV3");
+    return this.apiPost(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}:startProgress`,
+      assigneeUuid ? { assigneeUuid } : {},
+    );
+  }
+
+  async listIncidentCommentsV3(incidentUuid: string, pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listIncidentCommentsV3");
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/comments${qs}`,
+    );
+  }
+
+  async createIncidentCommentV3(incidentUuid: string, commentData: Record<string, unknown>): Promise<unknown> {
+    this.requireCloud("createIncidentCommentV3");
+    return this.apiPost(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/comments`,
+      normalizeIncidentCommentData(incidentUuid, commentData),
+    );
+  }
+
+  async getIncidentCommentV3(incidentUuid: string, commentUuid: string): Promise<unknown> {
+    this.requireCloud("getIncidentCommentV3");
+    return this.apiGet(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}`,
+    );
+  }
+
+  async deleteIncidentCommentV3(incidentUuid: string, commentUuid: string): Promise<unknown> {
+    this.requireCloud("deleteIncidentCommentV3");
+    return this.apiDelete(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}`,
+    );
+  }
+
+  async updateIncidentCommentTextV3(
+    incidentUuid: string,
+    commentUuid: string,
+    textData: Record<string, unknown>,
+  ): Promise<unknown> {
+    this.requireCloud("updateIncidentCommentTextV3");
+    return this.apiPost(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/comments/${encodeURIComponent(commentUuid)}:updateText`,
+      textData,
+    );
+  }
+
+  async listIncidentIndicatorsV3(
+    incidentUuid: string,
+    view?: string,
+    pageSize?: number,
+    pageToken?: string,
+  ): Promise<unknown> {
+    this.requireCloud("listIncidentIndicatorsV3");
+    const params: string[] = [];
+    if (view) params.push(`view=${encodeURIComponent(view)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/indicators${qs}`,
+    );
+  }
+
+  async getIncidentIndicatorV3(incidentUuid: string, indicatorUuid: string, view?: string): Promise<unknown> {
+    this.requireCloud("getIncidentIndicatorV3");
+    const qs = view ? `?view=${encodeURIComponent(view)}` : "";
+    return this.apiGet(
+      "incident-management",
+      `/v3/incidents/${encodeURIComponent(incidentUuid)}/indicators/${encodeURIComponent(indicatorUuid)}${qs}`,
+    );
+  }
+
+  async listIndicatorsV3(options: {
+    startTime?: string;
+    endTime?: string;
+    view?: string;
+    pageSize?: number;
+    pageToken?: string;
+  } = {}): Promise<unknown> {
+    this.requireCloud("listIndicatorsV3");
+    const params: string[] = [];
+    if (options.startTime) params.push(`startTime=${encodeURIComponent(options.startTime)}`);
+    if (options.endTime) params.push(`endTime=${encodeURIComponent(options.endTime)}`);
+    if (options.view) params.push(`view=${encodeURIComponent(options.view)}`);
+    addPagingParams(params, options.pageSize, options.pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("incident-management", `/v3/indicators${qs}`);
+  }
+
+  async getIndicatorV3(indicatorUuid: string, view?: string): Promise<unknown> {
+    this.requireCloud("getIndicatorV3");
+    const qs = view ? `?view=${encodeURIComponent(view)}` : "";
+    return this.apiGet(
+      "incident-management",
+      `/v3/indicators/${encodeURIComponent(indicatorUuid)}${qs}`,
+    );
+  }
+
   // ── Executables / Application Management (Cloud only) ─────────────
 
   async listExecutables(pageSize?: number, pageToken?: string): Promise<unknown> {
@@ -1888,6 +2077,12 @@ export class EsetClient {
   private async apiPut(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
     await this.ensureAuth();
     const res = await this.rawRequest("PUT", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
+    return this.parseApiResponse(res, { success: true });
+  }
+
+  private async apiPatch(cat: string, path: string, body: Record<string, unknown>): Promise<unknown> {
+    await this.ensureAuth();
+    const res = await this.rawRequest("PATCH", this.baseUrl(cat), path, JSON.stringify(body), "application/json", true);
     return this.parseApiResponse(res, { success: true });
   }
 

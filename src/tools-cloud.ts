@@ -62,6 +62,16 @@ const edrRuleExclusionBatchItemSchema = z.object({
   ),
 });
 
+const incidentApiVersionSchema = z.enum(["v2", "v3"]).optional().describe(
+  "Incident API version. Defaults to v2 for backward compatibility; use v3 for the new incident model.",
+);
+
+const indicatorViewSchema = z.enum([
+  "INDICATOR_VIEW_UNSPECIFIED",
+  "INDICATOR_VIEW_BASIC",
+  "INDICATOR_VIEW_FULL",
+]).optional().describe("Indicator field set. BASIC is the ESET default; FULL includes extension data.");
+
 export function registerCloudTools(server: McpServer, client: EsetClient): void {
   // ── Device Management (Cloud extras) ──────────────────────────────
 
@@ -70,6 +80,51 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     "Import a batch of devices (Cloud only)",
     { importData: z.string().describe("JSON string of device import data") },
     async ({ importData }) => json(await client.batchImportDevices(JSON.parse(importData))),
+  );
+
+  server.tool(
+    "list_installed_applications",
+    "List applications reported as installed on a managed device",
+    {
+      deviceUuid: z.string().describe("UUID of the device"),
+      pageSize: z.number().optional().describe("Results per page (maximum 1000)"),
+      pageToken: z.string().optional().describe("Token for the next page"),
+    },
+    async ({ deviceUuid, pageSize, pageToken }) =>
+      json(await client.listInstalledApplications(deviceUuid, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "set_master_device",
+    "Mark a device as a virtual-machine cloning master",
+    {
+      deviceUuid: z.string().describe("UUID of the device to mark as a master"),
+      cloningConfiguration: z.string().optional().describe(
+        "Optional JSON object with cloneNamingPatterns and/or securityGroupUuid, e.g. " +
+        "{\"cloneNamingPatterns\":[\"Finance-Desktop-{n}\"],\"securityGroupUuid\":\"...\"}",
+      ),
+    },
+    async ({ deviceUuid, cloningConfiguration }) => json(await client.setMasterDevice(
+      deviceUuid,
+      cloningConfiguration ? JSON.parse(cloningConfiguration) : undefined,
+    )),
+  );
+
+  server.tool(
+    "unset_master_device",
+    "Remove the virtual-machine cloning master designation from a device",
+    { deviceUuid: z.string().describe("UUID of the master device") },
+    async ({ deviceUuid }) => json(await client.unsetMasterDevice(deviceUuid)),
+  );
+
+  server.tool(
+    "update_device_description",
+    "Update the description of a managed device",
+    {
+      deviceUuid: z.string().describe("UUID of the device"),
+      description: z.string().describe("New device description"),
+    },
+    async ({ deviceUuid, description }) => json(await client.updateDeviceDescription(deviceUuid, description)),
   );
 
   // ── Asset Management ──────────────────────────────────────────────
@@ -507,15 +562,25 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       orderBy: z.string().optional().describe('Comma-separated fields with optional " desc" suffix, e.g. "severity desc"'),
       pageSize: z.number().optional().describe("Results per page"),
       pageToken: z.string().optional().describe("Token for next page"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ filter, orderBy, pageSize, pageToken }) => json(await client.listIncidents(filter, orderBy, pageSize, pageToken)),
+    async ({ filter, orderBy, pageSize, pageToken, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.listIncidentsV3(filter, orderBy, pageSize, pageToken)
+        : client.listIncidents(filter, orderBy, pageSize, pageToken)
+    )),
   );
 
   server.tool(
     "get_incident",
     "Get detailed information about a specific incident",
-    { incidentUuid: z.string().describe("UUID of the incident") },
-    async ({ incidentUuid }) => json(await client.getIncident(incidentUuid)),
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      apiVersion: incidentApiVersionSchema,
+    },
+    async ({ incidentUuid, apiVersion }) => json(await (
+      apiVersion === "v3" ? client.getIncidentV3(incidentUuid) : client.getIncident(incidentUuid)
+    )),
   );
 
   server.tool(
@@ -528,8 +593,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
         'REQUIRED. Reason for closing. Values: INCIDENT_RESOLVE_REASON_TRUE_POSITIVE, INCIDENT_RESOLVE_REASON_FALSE_POSITIVE, INCIDENT_RESOLVE_REASON_SUSPICIOUS'
       ),
       finalComment: z.string().optional().describe("Optional closing comment text explaining why/how the incident was resolved"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, closureReason, finalComment }) => json(await client.closeIncident(incidentUuid, closureReason, finalComment)),
+    async ({ incidentUuid, closureReason, finalComment, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.closeIncidentV3(incidentUuid, closureReason, finalComment)
+        : client.closeIncident(incidentUuid, closureReason, finalComment)
+    )),
   );
 
   server.tool(
@@ -538,8 +608,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     {
       incidentUuid: z.string().describe("UUID of the incident to reopen"),
       comment: z.string().optional().describe("Optional comment text explaining why the incident is being reopened"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, comment }) => json(await client.reopenIncident(incidentUuid, comment)),
+    async ({ incidentUuid, comment, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.reopenIncidentV3(incidentUuid, comment)
+        : client.reopenIncident(incidentUuid, comment)
+    )),
   );
 
   server.tool(
@@ -552,13 +627,50 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     async ({ incidentUuid, attributeData }) => json(await client.updateIncidentAttributes(incidentUuid, JSON.parse(attributeData))),
   );
 
+  server.tool(
+    "update_incident",
+    "Update selected fields of an incident through the v3 PATCH endpoint",
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      incidentData: z.string().describe(
+        "JSON object containing the v3 incident fields to update, such as assigneeUuid, description, displayName, severity, or mitreTechniqueIds",
+      ),
+    },
+    async ({ incidentUuid, incidentData }) =>
+      json(await client.updateIncidentV3(incidentUuid, JSON.parse(incidentData))),
+  );
+
+  server.tool(
+    "start_incident_progress",
+    "Move a v3 incident to In Progress. The incident must already have an assignee or assigneeUuid must be provided.",
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      assigneeUuid: z.string().optional().describe("Optional user UUID to assign while starting progress"),
+    },
+    async ({ incidentUuid, assigneeUuid }) => json(await client.startIncidentProgressV3(incidentUuid, assigneeUuid)),
+  );
+
   // ── Incident Comments ─────────────────────────────────────────────
 
   server.tool(
     "list_incident_comments",
     "List comments on an incident",
-    { incidentUuid: z.string().describe("UUID of the incident") },
-    async ({ incidentUuid }) => json(await client.listIncidentComments(incidentUuid)),
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      apiVersion: incidentApiVersionSchema,
+      pageSize: z.number().optional().describe("v3 only: results per page"),
+      pageToken: z.string().optional().describe("v3 only: token for the next page"),
+    },
+    async ({ incidentUuid, apiVersion, pageSize, pageToken }) => {
+      if (apiVersion !== "v3" && (pageSize !== undefined || pageToken !== undefined)) {
+        return jsonError({ error: "pageSize and pageToken require apiVersion=v3 for incident comments." });
+      }
+      return json(await (
+        apiVersion === "v3"
+          ? client.listIncidentCommentsV3(incidentUuid, pageSize, pageToken)
+          : client.listIncidentComments(incidentUuid)
+      ));
+    },
   );
 
   server.tool(
@@ -567,8 +679,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     {
       incidentUuid: z.string().describe("UUID of the incident"),
       commentData: z.string().describe("JSON string of comment data. Use {\"text\":\"...\"}; the MCP server wraps it as {comment:{incidentUuid,text}} for ESET."),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, commentData }) => json(await client.createIncidentComment(incidentUuid, JSON.parse(commentData))),
+    async ({ incidentUuid, commentData, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.createIncidentCommentV3(incidentUuid, JSON.parse(commentData))
+        : client.createIncidentComment(incidentUuid, JSON.parse(commentData))
+    )),
   );
 
   server.tool(
@@ -577,8 +694,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     {
       incidentUuid: z.string().describe("UUID of the incident"),
       commentUuid: z.string().describe("UUID of the comment"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, commentUuid }) => json(await client.getIncidentComment(incidentUuid, commentUuid)),
+    async ({ incidentUuid, commentUuid, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.getIncidentCommentV3(incidentUuid, commentUuid)
+        : client.getIncidentComment(incidentUuid, commentUuid)
+    )),
   );
 
   server.tool(
@@ -587,8 +709,13 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
     {
       incidentUuid: z.string().describe("UUID of the incident"),
       commentUuid: z.string().describe("UUID of the comment to delete"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, commentUuid }) => json(await client.deleteIncidentComment(incidentUuid, commentUuid)),
+    async ({ incidentUuid, commentUuid, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.deleteIncidentCommentV3(incidentUuid, commentUuid)
+        : client.deleteIncidentComment(incidentUuid, commentUuid)
+    )),
   );
 
   server.tool(
@@ -598,9 +725,69 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
       incidentUuid: z.string().describe("UUID of the incident"),
       commentUuid: z.string().describe("UUID of the comment"),
       textData: z.string().describe("JSON string of text update data (e.g. {text})"),
+      apiVersion: incidentApiVersionSchema,
     },
-    async ({ incidentUuid, commentUuid, textData }) =>
-      json(await client.updateIncidentCommentText(incidentUuid, commentUuid, JSON.parse(textData))),
+    async ({ incidentUuid, commentUuid, textData, apiVersion }) => json(await (
+      apiVersion === "v3"
+        ? client.updateIncidentCommentTextV3(incidentUuid, commentUuid, JSON.parse(textData))
+        : client.updateIncidentCommentText(incidentUuid, commentUuid, JSON.parse(textData))
+    )),
+  );
+
+  // ── Incident Indicators (v3) ─────────────────────────────────────
+
+  server.tool(
+    "list_incident_indicators",
+    "List indicators associated with a v3 incident",
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      view: indicatorViewSchema,
+      pageSize: z.number().optional().describe("Results per page (maximum 1000)"),
+      pageToken: z.string().optional().describe("Token for the next page"),
+    },
+    async ({ incidentUuid, view, pageSize, pageToken }) =>
+      json(await client.listIncidentIndicatorsV3(incidentUuid, view, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "get_incident_indicator",
+    "Get an indicator in the context of a specific v3 incident",
+    {
+      incidentUuid: z.string().describe("UUID of the incident"),
+      indicatorUuid: z.string().describe("UUID of the indicator"),
+      view: indicatorViewSchema,
+    },
+    async ({ incidentUuid, indicatorUuid, view }) =>
+      json(await client.getIncidentIndicatorV3(incidentUuid, indicatorUuid, view)),
+  );
+
+  server.tool(
+    "list_indicators",
+    "List incident indicators across the tenant through the v3 API",
+    {
+      startTime: z.string().optional().describe("Include indicators at or after this ISO 8601 timestamp"),
+      endTime: z.string().optional().describe("Include indicators before this ISO 8601 timestamp"),
+      view: indicatorViewSchema,
+      pageSize: z.number().optional().describe("Results per page (maximum 1000)"),
+      pageToken: z.string().optional().describe("Token for the next page"),
+    },
+    async ({ startTime, endTime, view, pageSize, pageToken }) => json(await client.listIndicatorsV3({
+      startTime,
+      endTime,
+      view,
+      pageSize,
+      pageToken,
+    })),
+  );
+
+  server.tool(
+    "get_indicator",
+    "Get a tenant incident indicator through the v3 API",
+    {
+      indicatorUuid: z.string().describe("UUID of the indicator"),
+      view: indicatorViewSchema,
+    },
+    async ({ indicatorUuid, view }) => json(await client.getIndicatorV3(indicatorUuid, view)),
   );
 
   // ── Executables / Application Management ──────────────────────────

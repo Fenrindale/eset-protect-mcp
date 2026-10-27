@@ -6,6 +6,7 @@ const METHOD_NAMES = new Map([
   ["apiGet", "GET"],
   ["apiPost", "POST"],
   ["apiPut", "PUT"],
+  ["apiPatch", "PATCH"],
   ["apiDelete", "DELETE"],
 ]);
 const SPECS = new Map([

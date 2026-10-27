@@ -65,8 +65,13 @@ const TOOL_RISK_OVERRIDES: Record<string, ToolRisk> = {
   disable_edr_rule: "destructive",
   block_executable: "high_write",
   unblock_executable: "high_write",
+  set_master_device: "high_write",
+  unset_master_device: "high_write",
+  update_device_description: "low_write",
   close_incident: "high_write",
   reopen_incident: "high_write",
+  update_incident: "high_write",
+  start_incident_progress: "high_write",
   resolve_detection: "high_write",
   resolve_detection_group: "high_write",
   restore_quarantined_object: "high_write",
@@ -265,6 +270,7 @@ function collectScopedValues(value: unknown, values: { devices: Set<string>; gro
       key === "deviceGroupUuid" ||
       key === "deviceGroupUuids" ||
       key === "deviceGroupsUuids" ||
+      key === "securityGroupUuid" ||
       key === "newParentUuid" ||
       key === "parentUuid"
     ) {

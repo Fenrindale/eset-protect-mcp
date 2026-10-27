@@ -63,6 +63,184 @@ test("updated request bodies use official ESET field names", async () => {
   ]);
 });
 
+test("new device management calls match the current ESET Connect contract", async () => {
+  const client = cloudClient();
+  const calls = [];
+  client.apiGet = async (category, path) => {
+    calls.push({ method: "GET", category, path });
+    return {};
+  };
+  client.apiPost = async (category, path, body) => {
+    calls.push({ method: "POST", category, path, body });
+    return {};
+  };
+
+  await client.listInstalledApplications("device", 25, "next page");
+  await client.setMasterDevice("device", {
+    cloneNamingPatterns: ["Finance-Desktop-{n}"],
+    securityGroupUuid: "group",
+  });
+  await client.unsetMasterDevice("device");
+  await client.updateDeviceDescription("device", "VDI golden image");
+
+  assert.deepEqual(calls, [
+    {
+      method: "GET",
+      category: "device-management",
+      path: "/v1/devices/device/applications?pageSize=25&pageToken=next%20page",
+    },
+    {
+      method: "POST",
+      category: "device-management",
+      path: "/v1/devices/device:setMasterDevice",
+      body: {
+        cloningConfiguration: {
+          cloneNamingPatterns: ["Finance-Desktop-{n}"],
+          securityGroupUuid: "group",
+        },
+      },
+    },
+    {
+      method: "POST",
+      category: "device-management",
+      path: "/v1/devices/device:unsetMasterDevice",
+      body: {},
+    },
+    {
+      method: "POST",
+      category: "device-management",
+      path: "/v1/devices/device:updateDescription",
+      body: { description: "VDI golden image" },
+    },
+  ]);
+});
+
+test("Incident Management v3 calls match all newly published routes", async () => {
+  const client = cloudClient();
+  const calls = [];
+  client.apiGet = async (category, path) => {
+    calls.push({ method: "GET", category, path });
+    return {};
+  };
+  client.apiPost = async (category, path, body) => {
+    calls.push({ method: "POST", category, path, body });
+    return {};
+  };
+  client.apiPatch = async (category, path, body) => {
+    calls.push({ method: "PATCH", category, path, body });
+    return {};
+  };
+  client.apiDelete = async (category, path) => {
+    calls.push({ method: "DELETE", category, path });
+    return {};
+  };
+
+  await client.listIncidentsV3("status==INCIDENT_STATUS_OPEN", "severity desc", 10, "incidents");
+  await client.getIncidentV3("incident");
+  await client.updateIncidentV3("incident", { description: "Investigating" });
+  await client.closeIncidentV3("incident", "INCIDENT_RESOLVE_REASON_TRUE_POSITIVE", "Resolved");
+  await client.reopenIncidentV3("incident", "Needs another review");
+  await client.startIncidentProgressV3("incident", "assignee");
+  await client.listIncidentCommentsV3("incident", 20, "comments");
+  await client.createIncidentCommentV3("incident", { text: "New comment" });
+  await client.getIncidentCommentV3("incident", "comment");
+  await client.deleteIncidentCommentV3("incident", "comment");
+  await client.updateIncidentCommentTextV3("incident", "comment", { text: "Updated" });
+  await client.listIncidentIndicatorsV3("incident", "INDICATOR_VIEW_FULL", 30, "indicators");
+  await client.getIncidentIndicatorV3("incident", "indicator", "INDICATOR_VIEW_FULL");
+  await client.listIndicatorsV3({
+    startTime: "2026-10-01T00:00:00Z",
+    endTime: "2026-10-27T00:00:00Z",
+    view: "INDICATOR_VIEW_BASIC",
+    pageSize: 40,
+    pageToken: "global",
+  });
+  await client.getIndicatorV3("global-indicator", "INDICATOR_VIEW_BASIC");
+
+  assert.deepEqual(calls, [
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/incidents?filter=status%3D%3DINCIDENT_STATUS_OPEN&orderBy=severity%20desc&pageSize=10&pageToken=incidents",
+    },
+    { method: "GET", category: "incident-management", path: "/v3/incidents/incident" },
+    {
+      method: "PATCH",
+      category: "incident-management",
+      path: "/v3/incidents/incident",
+      body: { description: "Investigating" },
+    },
+    {
+      method: "POST",
+      category: "incident-management",
+      path: "/v3/incidents/incident:close",
+      body: {
+        closureReason: "INCIDENT_RESOLVE_REASON_TRUE_POSITIVE",
+        finalComment: { text: "Resolved" },
+      },
+    },
+    {
+      method: "POST",
+      category: "incident-management",
+      path: "/v3/incidents/incident:reopen",
+      body: { comment: { text: "Needs another review" } },
+    },
+    {
+      method: "POST",
+      category: "incident-management",
+      path: "/v3/incidents/incident:startProgress",
+      body: { assigneeUuid: "assignee" },
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/incidents/incident/comments?pageSize=20&pageToken=comments",
+    },
+    {
+      method: "POST",
+      category: "incident-management",
+      path: "/v3/incidents/incident/comments",
+      body: { comment: { text: "New comment", incidentUuid: "incident" } },
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/incidents/incident/comments/comment",
+    },
+    {
+      method: "DELETE",
+      category: "incident-management",
+      path: "/v3/incidents/incident/comments/comment",
+    },
+    {
+      method: "POST",
+      category: "incident-management",
+      path: "/v3/incidents/incident/comments/comment:updateText",
+      body: { text: "Updated" },
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/incidents/incident/indicators?view=INDICATOR_VIEW_FULL&pageSize=30&pageToken=indicators",
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/incidents/incident/indicators/indicator?view=INDICATOR_VIEW_FULL",
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/indicators?startTime=2026-10-01T00%3A00%3A00Z&endTime=2026-10-27T00%3A00%3A00Z&view=INDICATOR_VIEW_BASIC&pageSize=40&pageToken=global",
+    },
+    {
+      method: "GET",
+      category: "incident-management",
+      path: "/v3/indicators/global-indicator?view=INDICATOR_VIEW_BASIC",
+    },
+  ]);
+});
+
 test("On-Prem authentication uses the 13.1 token schema", async () => {
   const client = new EsetClient({
     mode: "onprem",
@@ -247,13 +425,13 @@ test("On-Prem 13.1 configuration paths use the documented routes", async () => {
 });
 
 test("Cloud and On-Prem tool sets register without duplicate names", () => {
-  const cloudServer = new McpServer({ name: "cloud-test", version: "1.5.1" });
+  const cloudServer = new McpServer({ name: "cloud-test", version: "1.6.0" });
   const cloud = cloudClient();
   registerSharedTools(cloudServer, cloud);
   registerManagementTools(cloudServer, cloud);
   registerCloudTools(cloudServer, cloud);
 
-  const onPremServer = new McpServer({ name: "onprem-test", version: "1.5.1" });
+  const onPremServer = new McpServer({ name: "onprem-test", version: "1.6.0" });
   const onPrem = new EsetClient({
     mode: "onprem",
     serverUrl: "https://protect.example.test:9443",
@@ -331,6 +509,38 @@ test("scoped mode enforces official automation target UUID keys", async () => {
   assert.equal(ran, false);
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /blocked-device|blocked-group/);
+});
+
+test("scoped mode enforces master-device cloning security groups", async () => {
+  const security = new SecurityManager({
+    mode: "scoped",
+    allowedTools: null,
+    deniedTools: new Set(),
+    approvalRules: new Set(),
+    approvalDir: ".eset-mcp/test-approvals",
+    approvalTtlMs: 60_000,
+    allowGlobalScope: false,
+    allowedDeviceUuids: new Set(["allowed-device"]),
+    allowedGroupUuids: new Set(["allowed-group"]),
+    allowedRuleUuids: null,
+  });
+  let ran = false;
+
+  const result = await security.guard(
+    "set_master_device",
+    {
+      deviceUuid: "allowed-device",
+      cloningConfiguration: JSON.stringify({ securityGroupUuid: "blocked-group" }),
+    },
+    async () => {
+      ran = true;
+      return { content: [{ type: "text", text: "unexpected" }] };
+    },
+  );
+
+  assert.equal(ran, false);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /blocked-group/);
 });
 
 test("EDR exclusion failures identify multi-SHA1 WAF rejections without exposing hashes", () => {

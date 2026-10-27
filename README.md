@@ -25,19 +25,20 @@ npx -y eset-protect-mcp
 | **Asset Management** | `create_group`, `move_group`, `rename_group` |
 | **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
 
-### Cloud-Only Tools (ESET Connect) — 77 additional tools
+### Cloud-Only Tools (ESET Connect) — 87 additional tools
 
 | Category | Tools |
 |---|---|
-| **Devices (extra)** | `batch_import_devices` |
+| **Devices (extra)** | `batch_import_devices`, `list_installed_applications`, `set_master_device`, `unset_master_device`, `update_device_description` |
 | **Asset Management** | `delete_group` |
 | **Identity** | `list_permissions`, `list_role_assignments`, `assign_role`, `revoke_role`, `create_role`, `delete_role` |
 | **Detections** | `list_detections`, `list_detections_v2`, `get_detection`, `resolve_detection`, `batch_get_detections` |
 | **Detection Groups** | `list_detection_groups`, `get_detection_group`, `resolve_detection_group`, `search_detection_groups` |
 | **EDR Rules** | `list_edr_rules`, `create_edr_rule`, `get_edr_rule`, `delete_edr_rule`, `enable_edr_rule`, `disable_edr_rule`, `update_edr_rule_definition` |
 | **EDR Rule Exclusions** | `list_edr_rule_exclusions`, `search_edr_rule_exclusions`, `create_edr_rule_exclusion`, `create_edr_rule_exclusions_batch`, `get_edr_rule_exclusion`, `delete_edr_rule_exclusion`, `update_edr_rule_exclusion_definition` |
-| **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, `update_incident_attributes` |
+| **Incidents** | `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, `update_incident_attributes`, `update_incident`, `start_incident_progress` |
 | **Incident Comments** | `list_incident_comments`, `create_incident_comment`, `get_incident_comment`, `delete_incident_comment`, `update_incident_comment_text` |
+| **Incident Indicators** | `list_incident_indicators`, `get_incident_indicator`, `list_indicators`, `get_indicator` |
 | **Executables** | `list_executables`, `search_executables`, `get_executable`, `block_executable`, `unblock_executable` |
 | **Quarantine** | `list_quarantined_objects`, `get_quarantined_object`, `get_quarantine_count`, `batch_delete_quarantined_objects`, `batch_download_quarantined_objects`, `batch_restore_quarantined_objects`, `download_quarantined_object`, `purge_quarantined_objects`, `restore_quarantined_object` |
 | **Installers** | `list_installers`, `get_installer`, `create_installer`, `delete_installer`, `generate_gpo_sccm_file` |
@@ -55,6 +56,10 @@ npx -y eset-protect-mcp
 | **Server Configuration** | `get_server_configuration_value`, `batch_get_server_configuration_values` |
 
 Incident filters use unquoted enum constants. For example, use `status==INCIDENT_STATUS_OPEN`, not `status=="INCIDENT_STATUS_OPEN"`.
+
+Existing incident and comment tools default to API v2 for backward compatibility. Set `apiVersion="v3"` on `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, and the incident-comment tools to use the v3 model. The v3-only `update_incident` tool uses PATCH, `start_incident_progress` transitions an assigned incident to In Progress, and the indicator tools expose the new v3 incident-indicator inventory. Comment pagination is available only with `apiVersion="v3"`.
+
+Device inventory now includes `list_installed_applications`. Virtual-machine workflows can use `set_master_device` with an optional cloning configuration, `unset_master_device`, and `update_device_description`; these writes remain subject to the same sandbox, scope, and approval controls as other device mutations.
 
 `get_detection` defaults to `apiVersion=auto`: it calls v1 first and retries the official v2 endpoint after a 404. `batch_get_detections` uses ESET's atomic v2 batch endpoint first and, by default, retries UUIDs individually with the same version-aware behavior after a batch 404. Set `fallbackToIndividual=false` to preserve atomic failure behavior.
 
