@@ -42,6 +42,42 @@ test("identity requests use the IAM host and pagination", async () => {
   });
 });
 
+test("Identity role and user-account reads match the current ESET Connect contract", async () => {
+  const client = cloudClient();
+  const calls = [];
+  client.apiGet = async (category, path) => {
+    calls.push({ category, path });
+    return {};
+  };
+
+  await client.listRoles(25, "next page");
+  await client.getRole("security-operator");
+  await client.listUserAccounts({
+    displayName: "Security Operator",
+    email: "operator@example.test",
+  }, 50, "accounts");
+  await client.getUserAccount("123e4567-e89b-12d3-a456-426614174000");
+
+  assert.deepEqual(calls, [
+    {
+      category: "identity",
+      path: "/v2/roles?pageSize=25&pageToken=next%20page",
+    },
+    {
+      category: "identity",
+      path: "/v2/roles/security-operator",
+    },
+    {
+      category: "identity",
+      path: "/v2/user-accounts?displayName=Security%20Operator&email=operator%40example.test&pageSize=50&pageToken=accounts",
+    },
+    {
+      category: "identity",
+      path: "/v2/user-accounts/123e4567-e89b-12d3-a456-426614174000",
+    },
+  ]);
+});
+
 test("updated request bodies use official ESET field names", async () => {
   const client = cloudClient();
   const calls = [];
@@ -425,13 +461,13 @@ test("On-Prem 13.1 configuration paths use the documented routes", async () => {
 });
 
 test("Cloud and On-Prem tool sets register without duplicate names", () => {
-  const cloudServer = new McpServer({ name: "cloud-test", version: "1.6.0" });
+  const cloudServer = new McpServer({ name: "cloud-test", version: "1.7.0" });
   const cloud = cloudClient();
   registerSharedTools(cloudServer, cloud);
   registerManagementTools(cloudServer, cloud);
   registerCloudTools(cloudServer, cloud);
 
-  const onPremServer = new McpServer({ name: "onprem-test", version: "1.6.0" });
+  const onPremServer = new McpServer({ name: "onprem-test", version: "1.7.0" });
   const onPrem = new EsetClient({
     mode: "onprem",
     serverUrl: "https://protect.example.test:9443",
@@ -456,20 +492,23 @@ test("sandbox classification keeps new inventory tools read-only", async () => {
     allowedGroupUuids: null,
     allowedRuleUuids: null,
   });
-  let readRan = false;
+  const readsRun = [];
   let writeRan = false;
 
-  const readResult = await security.guard("list_device_vulnerabilities", {}, async () => {
-    readRan = true;
-    return { content: [{ type: "text", text: "ok" }] };
-  });
+  const readResults = [];
+  for (const toolName of ["list_device_vulnerabilities", "list_roles", "get_role", "list_user_accounts", "get_user_account"]) {
+    readResults.push(await security.guard(toolName, {}, async () => {
+      readsRun.push(toolName);
+      return { content: [{ type: "text", text: "ok" }] };
+    }));
+  }
   const writeResult = await security.guard("create_group", {}, async () => {
     writeRan = true;
     return { content: [{ type: "text", text: "unexpected" }] };
   });
 
-  assert.equal(readRan, true);
-  assert.equal(readResult.isError, undefined);
+  assert.deepEqual(readsRun, ["list_device_vulnerabilities", "list_roles", "get_role", "list_user_accounts", "get_user_account"]);
+  assert.equal(readResults.every((result) => result.isError === undefined), true);
   assert.equal(writeRan, false);
   assert.equal(writeResult.isError, true);
   assert.match(writeResult.content[0].text, /read-only/);

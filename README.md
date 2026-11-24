@@ -25,13 +25,13 @@ npx -y eset-protect-mcp
 | **Asset Management** | `create_group`, `move_group`, `rename_group` |
 | **Automation** | `list_device_tasks`, `create_device_task`, `get_device_task`, `delete_device_task`, `list_device_task_runs`, `update_device_task_targets`, `update_device_task_triggers` |
 
-### Cloud-Only Tools (ESET Connect) — 87 additional tools
+### Cloud-Only Tools (ESET Connect) — 91 additional tools
 
 | Category | Tools |
 |---|---|
 | **Devices (extra)** | `batch_import_devices`, `list_installed_applications`, `set_master_device`, `unset_master_device`, `update_device_description` |
 | **Asset Management** | `delete_group` |
-| **Identity** | `list_permissions`, `list_role_assignments`, `assign_role`, `revoke_role`, `create_role`, `delete_role` |
+| **Identity** | `list_permissions`, `list_roles`, `get_role`, `list_user_accounts`, `get_user_account`, `list_role_assignments`, `assign_role`, `revoke_role`, `create_role`, `delete_role` |
 | **Detections** | `list_detections`, `list_detections_v2`, `get_detection`, `resolve_detection`, `batch_get_detections` |
 | **Detection Groups** | `list_detection_groups`, `get_detection_group`, `resolve_detection_group`, `search_detection_groups` |
 | **EDR Rules** | `list_edr_rules`, `create_edr_rule`, `get_edr_rule`, `delete_edr_rule`, `enable_edr_rule`, `disable_edr_rule`, `update_edr_rule_definition` |
@@ -60,6 +60,8 @@ Incident filters use unquoted enum constants. For example, use `status==INCIDENT
 Existing incident and comment tools default to API v2 for backward compatibility. Set `apiVersion="v3"` on `list_incidents`, `get_incident`, `close_incident`, `reopen_incident`, and the incident-comment tools to use the v3 model. The v3-only `update_incident` tool uses PATCH, `start_incident_progress` transitions an assigned incident to In Progress, and the indicator tools expose the new v3 incident-indicator inventory. Comment pagination is available only with `apiVersion="v3"`.
 
 Device inventory now includes `list_installed_applications`. Virtual-machine workflows can use `set_master_device` with an optional cloning configuration, `unset_master_device`, and `update_device_description`; these writes remain subject to the same sandbox, scope, and approval controls as other device mutations.
+
+IAM inventory includes paginated role definitions through `list_roles`, individual lookup through `get_role`, and IAM account lookup through `list_user_accounts` and `get_user_account`. IAM accounts are distinct from the product users returned by `list_users`.
 
 `get_detection` defaults to `apiVersion=auto`: it calls v1 first and retries the official v2 endpoint after a 404. `batch_get_detections` uses ESET's atomic v2 batch endpoint first and, by default, retries UUIDs individually with the same version-aware behavior after a batch 404. Set `fallbackToIndividual=false` to preserve atomic failure behavior.
 

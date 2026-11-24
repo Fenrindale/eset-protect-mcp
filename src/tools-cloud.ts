@@ -154,6 +154,43 @@ export function registerCloudTools(server: McpServer, client: EsetClient): void 
   );
 
   server.tool(
+    "list_roles",
+    "List IAM role definitions and their granted permissions",
+    {
+      pageSize: z.number().optional().describe("Results per page (maximum 1000)"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ pageSize, pageToken }) => json(await client.listRoles(pageSize, pageToken)),
+  );
+
+  server.tool(
+    "get_role",
+    "Get an IAM role definition by its unique role name",
+    { roleName: z.string().describe("URL-safe unique role name") },
+    async ({ roleName }) => json(await client.getRole(roleName)),
+  );
+
+  server.tool(
+    "list_user_accounts",
+    "List IAM user accounts. This is separate from the product-user list_users tool.",
+    {
+      displayName: z.string().optional().describe("Exact IAM account display-name filter"),
+      email: z.string().optional().describe("Exact IAM account email filter"),
+      pageSize: z.number().optional().describe("Results per page (maximum 1000)"),
+      pageToken: z.string().optional().describe("Token for next page"),
+    },
+    async ({ displayName, email, pageSize, pageToken }) =>
+      json(await client.listUserAccounts({ displayName, email }, pageSize, pageToken)),
+  );
+
+  server.tool(
+    "get_user_account",
+    "Get an IAM user account by UUID",
+    { userAccountUuid: z.string().describe("IAM user account UUID") },
+    async ({ userAccountUuid }) => json(await client.getUserAccount(userAccountUuid)),
+  );
+
+  server.tool(
     "list_role_assignments",
     "List all role assignments",
     {

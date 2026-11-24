@@ -1134,6 +1134,38 @@ export class EsetClient {
     return this.apiGet("identity", `/v2/permissions${qs}`);
   }
 
+  async listRoles(pageSize?: number, pageToken?: string): Promise<unknown> {
+    this.requireCloud("listRoles");
+    const params: string[] = [];
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("identity", `/v2/roles${qs}`);
+  }
+
+  async getRole(roleName: string): Promise<unknown> {
+    this.requireCloud("getRole");
+    return this.apiGet("identity", `/v2/roles/${encodeURIComponent(roleName)}`);
+  }
+
+  async listUserAccounts(
+    filters?: { displayName?: string; email?: string },
+    pageSize?: number,
+    pageToken?: string,
+  ): Promise<unknown> {
+    this.requireCloud("listUserAccounts");
+    const params: string[] = [];
+    if (filters?.displayName) params.push(`displayName=${encodeURIComponent(filters.displayName)}`);
+    if (filters?.email) params.push(`email=${encodeURIComponent(filters.email)}`);
+    addPagingParams(params, pageSize, pageToken);
+    const qs = params.length ? `?${params.join("&")}` : "";
+    return this.apiGet("identity", `/v2/user-accounts${qs}`);
+  }
+
+  async getUserAccount(userAccountUuid: string): Promise<unknown> {
+    this.requireCloud("getUserAccount");
+    return this.apiGet("identity", `/v2/user-accounts/${encodeURIComponent(userAccountUuid)}`);
+  }
+
   async listRoleAssignments(filters?: {
     includeNestedScopes?: boolean;
     subjectReference?: string;
